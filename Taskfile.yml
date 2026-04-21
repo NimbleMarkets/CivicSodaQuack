@@ -1,0 +1,51 @@
+version: '3'
+
+tasks:
+  default:
+    desc: 'Default task is to "build"'
+    deps:
+      - build
+
+  list:
+    desc: 'Lists available tasks'
+    cmds:
+      - task --list-all
+
+  tidy:
+    desc: 'Tidy go modules'
+    run: once
+    cmds:
+      - go mod tidy
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  build:
+    desc: 'Build the csq CLI'
+    deps: [tidy]
+    cmds:
+      - go build -o csq ./cmd/csq
+    generates:
+      - csq
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  vet:
+    desc: 'Run go vet'
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: 'Run tests'
+    deps: [vet]
+    cmds:
+      - go test ./...
+
+  clean:
+    desc: 'Remove built artifacts'
+    cmds:
+      - rm -f csq
+      - rm -rf dist

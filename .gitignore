@@ -1,0 +1,19 @@
+# Binaries
+/bin/
+/dist/
+csq
+
+# DuckDB artifacts
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp/
+
+# Local data / caches
+/.task/
+/.csq/
+/data/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
