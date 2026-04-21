@@ -145,7 +145,7 @@ csq catalog --portal X --output portal.yaml [--force]
 ```
 
 - `--portal X` (required) — hits `/api/catalog/v1?domains=X` (paginated), caches into `_csq.catalog`.
-- Filters (client-side, after fetch): `--id`, `--name`, `--category`, `--tag` — all glob, AND across kinds.
+- Filters (client-side, after fetch): `--id` (literal 4x4 match, repeatable), `--name`, `--category`, `--tag` (all glob via `path.Match`, repeatable). Different filter kinds combine with AND; repeats of the same kind combine with OR.
 - `--json` — emit full catalog entries as JSON. Default is a human table (id, name, category, rows, updated_at).
 - `--refresh` — force refetch, overwrite cache.
 - `--output FILE` — emit a starter YAML: `portal:`, empty `defaults:`, commented-out `include:` block listing every matched dataset (id + name comment), empty `overrides:`. Refuses if `FILE` exists unless `--force`.
@@ -162,7 +162,7 @@ csq sync --config FILE [--dry-run] [--refresh-catalog] [--concurrency N] [--only
 - `--dry-run` — fetch/cache catalog, resolve selectors, print "would sync these N datasets" with per-dataset effective config, exit 0. No writes.
 - `--refresh-catalog` — force catalog refetch before resolution. Without this flag, a cached catalog is used when present; an absent cache triggers a single fetch.
 - `--concurrency N` — overrides YAML `concurrency`.
-- `--only ID[,ID,...]` — intersection with selector-resolved set. Useful for retrying specific datasets after a partial failure.
+- `--only ID[,ID,...]` — comma-separated list of literal 4x4 ids, intersected with the selector-resolved set. Useful for retrying specific datasets after a partial failure. Ids not in the resolved set are errors, not silent drops.
 - `-v / --verbose` — noisier progress.
 
 ### Exit codes (sync)
@@ -201,7 +201,7 @@ csq sync --config FILE [--dry-run] [--refresh-catalog] [--concurrency N] [--only
    2. `BuildSchema(target.Table, metadata.Columns)` honoring `columns.skip`.
    3. `CREATE TABLE "_csq_staging"."<table>_<runid>"` (fresh every run).
    4. Stream rows via `socrata.Client.StreamRows(order_by, where, limit, …)`, inserting into the staging table. Emit `DatasetProgress` per page.
-   5. `DROP TABLE IF EXISTS main."<table>"`; `ALTER TABLE "_csq_staging"."<table>_<runid>" RENAME TO "<table>"`; move into the main schema.
+   5. Swap into place (see "The swap" below).
    6. Insert ok row into `_csq.sync_runs`.
    7. On error: leave staging table in place for debugging; insert failure row into `_csq.sync_runs`; honor `on_error` (continue → next dataset; abort → cancel shared context).
 8. After pool drains: print summary. Exit 0 if all ok, 1 if any failed.
@@ -216,7 +216,17 @@ Single `errgroup.Group` with `SetLimit(concurrency)` for dataset-level paralleli
 
 ### The swap
 
-"Drop main, rename staging into main" is two statements. DuckDB supports transactional DDL, so we wrap both in a single transaction to avoid a millisecond window where a concurrent reader sees a missing table. The file is single-writer; the planned TUI and Phase 3 MCP are read-mostly.
+Replacing the previous-run table with the newly-staged one is a three-statement sequence (DuckDB's `ALTER TABLE ... RENAME` keeps the table in its current schema; moving schemas is a separate `SET SCHEMA`):
+
+```sql
+BEGIN;
+DROP TABLE IF EXISTS main."<table>";
+ALTER TABLE _csq_staging."<table>_<runid>" RENAME TO "<table>";
+ALTER TABLE _csq_staging."<table>" SET SCHEMA main;
+COMMIT;
+```
+
+DuckDB supports transactional DDL, so the whole sequence is atomic from a concurrent reader's perspective — no window where the table is missing or half-named. The file is single-writer anyway; the planned TUI and Phase 3 MCP are read-mostly and can tolerate the write transaction briefly locking out reads.
 
 ### `on_error` semantics
 
