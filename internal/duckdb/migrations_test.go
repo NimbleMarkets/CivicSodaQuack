@@ -40,6 +40,25 @@ func TestApplyMigrations_CreatesSchemasAndTables(t *testing.T) {
 	}
 }
 
+func TestApplyMigrations_CreatesIndex(t *testing.T) {
+	w, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+
+	var n int
+	err = w.DB.QueryRow(
+		`SELECT COUNT(*) FROM duckdb_indexes() WHERE schema_name = '_csq' AND index_name = 'sync_runs_by_dataset'`,
+	).Scan(&n)
+	if err != nil {
+		t.Fatalf("query indexes: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("sync_runs_by_dataset index: want 1 row, got %d", n)
+	}
+}
+
 func TestApplyMigrations_Idempotent(t *testing.T) {
 	w, err := Open(":memory:")
 	if err != nil {
