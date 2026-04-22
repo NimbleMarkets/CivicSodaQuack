@@ -26,6 +26,14 @@ type CatalogEntry struct {
 	Raw       json.RawMessage
 }
 
+var catalogTimestampLayouts = []string{
+	"2006-01-02T15:04:05.000Z",
+	"2006-01-02T15:04:05.000",
+	"2006-01-02T15:04:05Z",
+	"2006-01-02T15:04:05",
+	time.RFC3339,
+}
+
 // FetchCatalog returns every dataset the portal reports, following pagination.
 func (c *Client) FetchCatalog(portal string) ([]CatalogEntry, error) {
 	return c.fetchCatalogScheme(portal, "https")
@@ -77,6 +85,11 @@ type catalogResponse struct {
 	ResultSetSize int               `json:"resultSetSize"`
 }
 
+// getCatalogPage performs a single GET with no retry. Catalog fetches are
+// one-shot pre-flight calls; errors propagate to the caller (typically the
+// sync orchestrator), which can re-invoke FetchCatalog if desired. The row-
+// streaming path in getPage has its own 429/5xx retry loop; conflating the
+// two would create competing retry scopes.
 func (c *Client) getCatalogPage(fullURL string) ([]CatalogEntry, int, error) {
 	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
 	if err != nil {
@@ -115,8 +128,11 @@ func (c *Client) getCatalogPage(fullURL string) ([]CatalogEntry, int, error) {
 			Raw:         raw,
 		}
 		if r.Resource.RowsUpdatedAt != "" {
-			if t, err := time.Parse("2006-01-02T15:04:05.000", r.Resource.RowsUpdatedAt); err == nil {
-				e.UpdatedAt = &t
+			for _, layout := range catalogTimestampLayouts {
+				if t, err := time.Parse(layout, r.Resource.RowsUpdatedAt); err == nil {
+					e.UpdatedAt = &t
+					break
+				}
 			}
 		}
 		entries = append(entries, e)

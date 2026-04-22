@@ -60,4 +60,12 @@ func TestFetchCatalog_Paginates(t *testing.T) {
 	if len(entries[0].Tags) != 1 || entries[0].Tags[0] != "crime" {
 		t.Errorf("tags: got %v", entries[0].Tags)
 	}
+	if entries[0].UpdatedAt == nil {
+		t.Error("UpdatedAt: got nil, want non-nil")
+	} else if entries[0].UpdatedAt.Year() != 2024 {
+		t.Errorf("UpdatedAt year: got %d, want 2024", entries[0].UpdatedAt.Year())
+	}
+	if len(entries[0].Raw) == 0 {
+		t.Error("Raw: expected non-empty JSON")
+	}
 }
