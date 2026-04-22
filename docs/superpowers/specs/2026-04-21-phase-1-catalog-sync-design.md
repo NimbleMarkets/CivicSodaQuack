@@ -281,7 +281,8 @@ CREATE TABLE IF NOT EXISTS _csq.sync_runs (
     rows_written  BIGINT,                -- NULL on failure
     error         VARCHAR,               -- NULL on ok
     duration_ms   BIGINT,
-    config_hash   VARCHAR                -- hash of effective per-dataset config
+    config_hash   VARCHAR,                -- hash of effective per-dataset config
+    PRIMARY KEY (run_id, dataset_id)
 );
 CREATE INDEX IF NOT EXISTS sync_runs_by_dataset ON _csq.sync_runs (dataset_id, started_at DESC);
 ```

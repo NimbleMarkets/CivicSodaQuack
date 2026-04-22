@@ -181,7 +181,8 @@ func Apply(db *sql.DB) error {
 			rows_written BIGINT,
 			error        VARCHAR,
 			duration_ms  BIGINT,
-			config_hash  VARCHAR
+			config_hash  VARCHAR,
+			PRIMARY KEY (run_id, dataset_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS sync_runs_by_dataset ON _csq.sync_runs (dataset_id, started_at DESC)`,
 	}
