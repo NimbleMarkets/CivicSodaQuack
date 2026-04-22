@@ -39,6 +39,11 @@ func (c *Client) FetchCatalog(portal string) ([]CatalogEntry, error) {
 	return c.fetchCatalogScheme(portal, "https")
 }
 
+// FetchCatalogScheme is FetchCatalog with an explicit URL scheme (for tests).
+func (c *Client) FetchCatalogScheme(portal, scheme string) ([]CatalogEntry, error) {
+	return c.fetchCatalogScheme(portal, scheme)
+}
+
 // fetchCatalogScheme is the scheme-parameterised form used in tests with httptest.
 func (c *Client) fetchCatalogScheme(portal, scheme string) ([]CatalogEntry, error) {
 	base := &url.URL{Scheme: scheme, Host: portal, Path: "/api/catalog/v1"}
