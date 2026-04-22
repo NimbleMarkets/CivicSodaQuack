@@ -20,7 +20,7 @@ func Load(path string) (*Config, error) {
 
 	// Expand ${ENV_VAR} in the app_token line only — identify by YAML key
 	// on the line to avoid touching e.g. SoQL $where clauses.
-	data = expandAppTokenEnv(data)
+	data, hadEnvRef := expandAppTokenEnv(data)
 
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -30,6 +30,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyDefaults(&cfg)
+	if hadEnvRef && cfg.AppToken == "" {
+		return nil, fmt.Errorf("validate %q: app_token: ${ENV} reference expanded to empty string (env var unset?)", path)
+	}
 	if err := validate(&cfg); err != nil {
 		return nil, fmt.Errorf("validate %q: %w", path, err)
 	}
@@ -38,13 +41,16 @@ func Load(path string) (*Config, error) {
 
 var appTokenEnvPattern = regexp.MustCompile(`(?m)^(\s*app_token\s*:\s*)\$\{([A-Z0-9_]+)\}\s*$`)
 
-func expandAppTokenEnv(data []byte) []byte {
-	return appTokenEnvPattern.ReplaceAllFunc(data, func(match []byte) []byte {
+func expandAppTokenEnv(data []byte) ([]byte, bool) {
+	hadRef := false
+	out := appTokenEnvPattern.ReplaceAllFunc(data, func(match []byte) []byte {
+		hadRef = true
 		sub := appTokenEnvPattern.FindSubmatch(match)
 		prefix := sub[1]
 		envVar := string(sub[2])
 		return append(append([]byte{}, prefix...), []byte(os.Getenv(envVar))...)
 	})
+	return out, hadRef
 }
 
 func applyDefaults(cfg *Config) {

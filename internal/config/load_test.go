@@ -55,6 +55,15 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.OnError != "continue" {
 		t.Errorf("on_error default: got %q", cfg.OnError)
 	}
+	if cfg.DB != "data.example.org.duckdb" {
+		t.Errorf("db default: got %q, want data.example.org.duckdb", cfg.DB)
+	}
+	if cfg.Defaults.BatchSize != 5000 {
+		t.Errorf("defaults.batch_size: got %d, want 5000", cfg.Defaults.BatchSize)
+	}
+	if cfg.Defaults.OrderBy != ":id" {
+		t.Errorf("defaults.order_by: got %q, want :id", cfg.Defaults.OrderBy)
+	}
 }
 
 func TestLoad_UnknownKey(t *testing.T) {
@@ -88,5 +97,44 @@ func TestLoad_EmptyInclude(t *testing.T) {
 	_, err = Load(f.Name())
 	if err == nil {
 		t.Fatal("want error for missing include, got nil")
+	}
+}
+
+func TestLoad_AppTokenEnvUnset(t *testing.T) {
+	// Ensure the env var is NOT set.
+	t.Setenv("SOCRATA_APP_TOKEN_FOR_TEST_ONLY", "")
+	os.Unsetenv("SOCRATA_APP_TOKEN_FOR_TEST_ONLY")
+
+	f, err := os.CreateTemp(t.TempDir(), "cfg-*.yaml")
+	if err != nil {
+		t.Fatalf("tempfile: %v", err)
+	}
+	f.WriteString("portal: data.example.org\napp_token: ${SOCRATA_APP_TOKEN_FOR_TEST_ONLY}\ninclude:\n  - id: aaaa-bbbb\n")
+	f.Close()
+
+	_, err = Load(f.Name())
+	if err == nil {
+		t.Fatal("want error for unset env var, got nil")
+	}
+	if !strings.Contains(err.Error(), "app_token") {
+		t.Errorf("error should name app_token: %v", err)
+	}
+}
+
+func TestLoad_SelectorMustHaveExactlyOne(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "cfg-*.yaml")
+	if err != nil {
+		t.Fatalf("tempfile: %v", err)
+	}
+	// Both id AND name set on the same selector — invalid.
+	f.WriteString("portal: data.example.org\ninclude:\n  - id: aaaa-bbbb\n    name: \"Crimes*\"\n")
+	f.Close()
+
+	_, err = Load(f.Name())
+	if err == nil {
+		t.Fatal("want error for selector with multiple fields, got nil")
+	}
+	if !strings.Contains(err.Error(), "include[0]") {
+		t.Errorf("error should reference include[0]: %v", err)
 	}
 }
