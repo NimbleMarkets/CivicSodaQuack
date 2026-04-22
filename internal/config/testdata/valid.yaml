@@ -1,0 +1,27 @@
+portal: data.cityofchicago.org
+app_token: ${SOCRATA_APP_TOKEN}
+db: data.cityofchicago.org.duckdb
+concurrency: 4
+on_error: continue
+defaults:
+  batch_size: 5000
+  order_by: ":id"
+include:
+  - id: 6zsd-86xi
+  - name: "Crimes*"
+  - category: "Public Safety"
+  - tag: "311*"
+exclude:
+  - id: 85ca-t3if
+  - name: "*Archive*"
+overrides:
+  6zsd-86xi:
+    table: crimes
+    where: "date >= '2015-01-01'"
+    order_by: ":updated_at"
+    batch_size: 10000
+    columns:
+      skip:
+        - location_description_raw
+  ijzp-q8t2:
+    limit: 100000

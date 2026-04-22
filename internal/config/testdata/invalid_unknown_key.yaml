@@ -1,0 +1,4 @@
+portal: data.example.org
+mystery_key: whatever
+include:
+  - id: aaaa-bbbb

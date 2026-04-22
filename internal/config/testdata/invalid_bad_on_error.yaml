@@ -1,0 +1,4 @@
+portal: data.example.org
+on_error: panic
+include:
+  - id: aaaa-bbbb
