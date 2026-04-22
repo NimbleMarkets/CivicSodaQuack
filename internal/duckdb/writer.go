@@ -26,6 +26,10 @@ func Open(path string) (*Writer, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping duckdb %q: %w", path, err)
 	}
+	if err := Apply(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply migrations %q: %w", path, err)
+	}
 	return &Writer{DB: db}, nil
 }
 
