@@ -19,9 +19,11 @@ type CatalogEntry struct {
 	Description string
 	Category    string
 	Tags        []string
-	RowCount    *int64
-	UpdatedAt   *time.Time
-	Raw         json.RawMessage
+	// RowCount is left nil in Phase 1: Socrata's /api/catalog/v1 does not
+	// reliably expose row counts across portals. Callers should tolerate nil.
+	RowCount  *int64
+	UpdatedAt *time.Time
+	Raw       json.RawMessage
 }
 
 // FetchCatalog returns every dataset the portal reports, following pagination.

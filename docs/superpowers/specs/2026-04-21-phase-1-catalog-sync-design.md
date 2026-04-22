@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS _csq.catalog (
     description   VARCHAR,
     category      VARCHAR,               -- classification.domain_category
     tags          JSON,                  -- array of strings
-    row_count     BIGINT,                -- as reported by catalog (nullable)
+    row_count     BIGINT,                -- reserved; Socrata catalog rarely exposes row counts, so NULL by default
     updated_at    TIMESTAMP,             -- dataset's rowsUpdatedAt
     fetched_at    TIMESTAMP NOT NULL,    -- when we pulled this row into cache
     raw           JSON NOT NULL          -- full catalog entry, for forward-compat
