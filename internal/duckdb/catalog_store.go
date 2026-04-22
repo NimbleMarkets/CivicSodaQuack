@@ -13,7 +13,14 @@ import (
 
 // UpsertCatalog replaces the entire _csq.catalog with the given entries,
 // stamping fetched_at = now. Done in a single transaction.
+//
+// An empty entries slice is a no-op (the existing cache is preserved).
+// Callers that want to clear the cache should do so explicitly via
+// separate SQL; this function will never wipe the catalog on an empty input.
 func (w *Writer) UpsertCatalog(entries []socrata.CatalogEntry, now time.Time) error {
+	if len(entries) == 0 {
+		return nil
+	}
 	tx, err := w.DB.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -82,8 +89,12 @@ func (w *Writer) ReadCatalog() ([]socrata.CatalogEntry, error) {
 		e.Description = description.String
 		e.Category = category.String
 		if tagsVal != nil {
-			if b, err := json.Marshal(tagsVal); err == nil {
-				_ = json.Unmarshal(b, &e.Tags)
+			b, err := json.Marshal(tagsVal)
+			if err != nil {
+				return nil, fmt.Errorf("marshal tags for %q: %w", e.ID, err)
+			}
+			if err := json.Unmarshal(b, &e.Tags); err != nil {
+				return nil, fmt.Errorf("unmarshal tags for %q: %w", e.ID, err)
 			}
 		}
 		if rowCount.Valid {
@@ -95,9 +106,11 @@ func (w *Writer) ReadCatalog() ([]socrata.CatalogEntry, error) {
 			e.UpdatedAt = &ua
 		}
 		if rawVal != nil {
-			if b, err := json.Marshal(rawVal); err == nil {
-				e.Raw = json.RawMessage(b)
+			b, err := json.Marshal(rawVal)
+			if err != nil {
+				return nil, fmt.Errorf("marshal raw for %q: %w", e.ID, err)
 			}
+			e.Raw = json.RawMessage(b)
 		}
 		out = append(out, e)
 	}
