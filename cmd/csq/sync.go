@@ -69,10 +69,14 @@ func runSync(args []string) error {
 		}
 	}
 
+	scheme := "https"
+	if s := os.Getenv("CSQ_SCHEME"); s != "" {
+		scheme = s
+	}
 	summary, err := syncpkg.Run(context.Background(), cfg, syncpkg.Deps{
 		DB:             w,
 		Client:         client,
-		Scheme:         "https",
+		Scheme:         scheme,
 		Reporter:       &syncpkg.StderrReporter{Out: os.Stderr},
 		Only:           onlyIDs,
 		DryRun:         dryRun,
