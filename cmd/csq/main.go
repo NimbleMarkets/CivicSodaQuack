@@ -50,6 +50,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "csq catalog: %v\n", err)
 			os.Exit(1)
 		}
+	case "sync":
+		if err := runSync(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq sync: %v\n", err)
+			os.Exit(1)
+		}
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
