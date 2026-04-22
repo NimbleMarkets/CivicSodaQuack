@@ -112,6 +112,41 @@ func (s TableSchema) InsertSQL() string {
 	return b.String()
 }
 
+// CreateTableSQLIn returns a CREATE TABLE statement targeting "<schemaName>"."<table>".
+func (s TableSchema) CreateTableSQLIn(schemaName string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `CREATE TABLE IF NOT EXISTS "%s"."%s" (`, schemaName, s.Table)
+	for i, c := range s.Columns {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `"%s" %s`, c.Name, c.Type)
+	}
+	b.WriteString(")")
+	return b.String()
+}
+
+// InsertSQLIn returns an INSERT INTO "<schemaName>"."<table>" with positional placeholders.
+func (s TableSchema) InsertSQLIn(schemaName string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `INSERT INTO "%s"."%s" (`, schemaName, s.Table)
+	for i, c := range s.Columns {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `"%s"`, c.Name)
+	}
+	b.WriteString(") VALUES (")
+	for i := range s.Columns {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "$%d", i+1)
+	}
+	b.WriteString(")")
+	return b.String()
+}
+
 // --- extractors -----------------------------------------------------------
 
 func extractScalar(field string, dt socrata.DuckDBType) func(socrata.Row) (any, error) {

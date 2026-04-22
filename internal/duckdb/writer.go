@@ -105,3 +105,36 @@ func (w *Writer) RowCount(table string) (int64, error) {
 	err := w.DB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, table)).Scan(&n)
 	return n, err
 }
+
+// InsertRowsInto inserts rows into "<schemaName>"."<ts.Table>".
+func (w *Writer) InsertRowsInto(schemaName string, ts TableSchema, rows []socrata.Row) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := w.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(ts.InsertSQLIn(schemaName))
+	if err != nil {
+		return fmt.Errorf("prepare insert: %w", err)
+	}
+	defer stmt.Close()
+
+	vals := make([]any, len(ts.Columns))
+	for rowIdx, row := range rows {
+		for i, col := range ts.Columns {
+			v, err := col.Extract(row)
+			if err != nil {
+				return fmt.Errorf("row %d col %q: %w", rowIdx, col.Name, err)
+			}
+			vals[i] = v
+		}
+		if _, err := stmt.Exec(vals...); err != nil {
+			return fmt.Errorf("insert row %d: %w", rowIdx, err)
+		}
+	}
+	return tx.Commit()
+}
