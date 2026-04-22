@@ -66,36 +66,6 @@ README.md                                # Phase 1 quickstart section
 
 ---
 
-## Task 0: Bootstrap dependencies
-
-**Files:**
-- Modify: `go.mod`
-- Modify: `go.sum`
-
-- [ ] **Step 1: Add YAML and ULID as direct dependencies**
-
-Run:
-```bash
-cd /Users/evan/projects/cannabis_research/CivicSodaQuack
-go get gopkg.in/yaml.v3@v3.0.1
-go get github.com/oklog/ulid/v2@v2.1.0
-go mod tidy
-```
-
-- [ ] **Step 2: Verify build still works**
-
-Run: `go build ./...`
-Expected: no errors, no output.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add go.mod go.sum
-git commit -m "deps: add yaml.v3 and ulid/v2 for Phase 1"
-```
-
----
-
 ## Task 1: DuckDB `_csq` schema migrations
 
 The `_csq` schema holds catalog cache and sync history; `_csq_staging` holds in-flight tables. Both are created idempotently on `duckdb.Open()`.
@@ -707,6 +677,17 @@ Loads, validates, and `${ENV}`-expands the per-portal YAML.
 - Create: `internal/config/testdata/valid.yaml`
 - Create: `internal/config/testdata/invalid_unknown_key.yaml`
 - Create: `internal/config/testdata/invalid_bad_on_error.yaml`
+- Modify: `go.mod`, `go.sum` (adds `gopkg.in/yaml.v3`)
+
+- [ ] **Step 0: Add the YAML dependency**
+
+Run:
+```bash
+cd /Users/evan/projects/cannabis_research/CivicSodaQuack
+go get gopkg.in/yaml.v3@v3.0.1
+```
+
+`go mod tidy` will be deferred until the package is created and imported (Step 5), so the dep doesn't get demoted before there's a consumer.
 
 - [ ] **Step 1: Write config.go (types only — no behavior yet)**
 
@@ -1036,6 +1017,11 @@ func (s Selector) validate() error {
 }
 ```
 
+- [ ] **Step 5: Tidy the module now that yaml.v3 is imported**
+
+Run: `go mod tidy`
+Expected: `gopkg.in/yaml.v3` appears in the direct `require` block of `go.mod` (not `// indirect`).
+
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `go test ./internal/config/ -v`
@@ -1044,7 +1030,7 @@ Expected: all pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/config/
+git add go.mod go.sum internal/config/
 git commit -m "config: add YAML loader with validation and \${ENV} expansion"
 ```
 
@@ -2707,6 +2693,19 @@ Wires config → catalog fetch/read → resolve → worker pool → `sync_runs` 
 **Files:**
 - Create: `internal/sync/run.go`
 - Create: `internal/sync/run_test.go`
+- Create: `internal/sync/stderr.go`
+- Modify: `internal/socrata/catalog.go` (exposed `FetchCatalogScheme`)
+- Modify: `go.mod`, `go.sum` (adds `github.com/oklog/ulid/v2`)
+
+- [ ] **Step 0: Add the ULID dependency**
+
+Run:
+```bash
+cd /Users/evan/projects/cannabis_research/CivicSodaQuack
+go get github.com/oklog/ulid/v2@v2.1.0
+```
+
+`go mod tidy` will be deferred until `run.go` imports it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2840,13 +2839,13 @@ package sync
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync/atomic"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/neomantra/CivicSodaQuack/internal/config"
@@ -3007,10 +3006,11 @@ func recordAborted(db *duckdb.Writer, runID string, t DatasetTarget, now time.Ti
 	_ = db.FinishSyncRun(rowid, "aborted", 0, msg, now)
 }
 
+// newRunID returns a fresh ULID as a string. ULIDs are time-ordered, so
+// run_ids sort chronologically without also joining on started_at.
 func newRunID() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	entropy := ulid.Monotonic(rand.New(rand.NewSource(time.Now().UnixNano())), 0)
+	return ulid.MustNew(ulid.Timestamp(time.Now()), entropy).String()
 }
 
 // stderrWriter lazy-imports os.Stderr, keeping this file import-light for tests.
@@ -3050,20 +3050,25 @@ func writeStderr(p []byte) (int, error) {
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 6: Tidy the module now that ulid is imported**
+
+Run: `go mod tidy`
+Expected: `github.com/oklog/ulid/v2` appears in the direct `require` block of `go.mod`.
+
+- [ ] **Step 7: Run tests to verify they pass**
 
 Run: `go test ./internal/sync/ -run TestRun -v`
 Expected: all pass.
 
-- [ ] **Step 7: Run full test suite**
+- [ ] **Step 8: Run full test suite**
 
 Run: `go test ./...`
 Expected: all pass.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add internal/sync/run.go internal/sync/run_test.go internal/sync/stderr.go internal/socrata/catalog.go
+git add go.mod go.sum internal/sync/run.go internal/sync/run_test.go internal/sync/stderr.go internal/socrata/catalog.go
 git commit -m "sync: add Run orchestrator with worker pool and sync_runs accounting"
 ```
 
