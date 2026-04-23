@@ -38,6 +38,8 @@ type Override struct {
 	BatchSize int     `yaml:"batch_size"`
 	Limit     int     `yaml:"limit"`
 	Columns   Columns `yaml:"columns"`
+	Mode      string  `yaml:"mode"`       // "" | "incremental" | "full_replace"
+	HWMColumn string  `yaml:"hwm_column"` // "" defaults to ":updated_at"
 }
 
 // Columns carries column-level overrides.
