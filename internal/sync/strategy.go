@@ -134,7 +134,8 @@ func streamInto(
 	idx, total int,
 ) error {
 	return client.StreamRowsCtx(ctx, scheme, portal, target.ID,
-		target.Effective.OrderBy, target.Effective.Where, target.Effective.Limit,
+		target.Effective.OrderBy, target.Effective.Where, "",
+		target.Effective.Limit,
 		func(page []socrata.Row) error {
 			if err := w.InsertRowsInto("_csq_staging", schema, page); err != nil {
 				return err
