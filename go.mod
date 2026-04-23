@@ -4,7 +4,10 @@ go 1.24.1
 
 require (
 	github.com/duckdb/duckdb-go/v2 v2.5.4
+	github.com/oklog/ulid/v2 v2.1.0
 	github.com/spf13/pflag v1.0.6
+	golang.org/x/sync v0.19.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -27,7 +30,6 @@ require (
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9 // indirect
 	golang.org/x/mod v0.31.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/telemetry v0.0.0-20251208220230-2638a1023523 // indirect
 	golang.org/x/tools v0.40.0 // indirect

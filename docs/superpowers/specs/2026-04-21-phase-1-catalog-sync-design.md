@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS _csq.catalog (
     description   VARCHAR,
     category      VARCHAR,               -- classification.domain_category
     tags          JSON,                  -- array of strings
-    row_count     BIGINT,                -- as reported by catalog (nullable)
+    row_count     BIGINT,                -- reserved; Socrata catalog rarely exposes row counts, so NULL by default
     updated_at    TIMESTAMP,             -- dataset's rowsUpdatedAt
     fetched_at    TIMESTAMP NOT NULL,    -- when we pulled this row into cache
     raw           JSON NOT NULL          -- full catalog entry, for forward-compat
@@ -281,7 +281,8 @@ CREATE TABLE IF NOT EXISTS _csq.sync_runs (
     rows_written  BIGINT,                -- NULL on failure
     error         VARCHAR,               -- NULL on ok
     duration_ms   BIGINT,
-    config_hash   VARCHAR                -- hash of effective per-dataset config
+    config_hash   VARCHAR,                -- hash of effective per-dataset config
+    PRIMARY KEY (run_id, dataset_id)
 );
 CREATE INDEX IF NOT EXISTS sync_runs_by_dataset ON _csq.sync_runs (dataset_id, started_at DESC);
 ```
