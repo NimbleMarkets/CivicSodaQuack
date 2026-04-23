@@ -12,7 +12,7 @@ import (
 type DatasetState struct {
 	DatasetID         string
 	HWMUpdatedAt      *time.Time // nil when the source dataset has no usable :updated_at
-	LastFullReplaceAt *time.Time
+	LastFullReplaceAt *time.Time // when the table was last bootstrapped
 	LastRunID         string
 	HWMColumn         string // ":updated_at" by default
 }

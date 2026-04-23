@@ -56,6 +56,9 @@ func TestDatasetState_UpsertRoundTrip(t *testing.T) {
 	if got.LastRunID != "01HXYZ" || got.HWMColumn != ":updated_at" {
 		t.Errorf("got %+v", got)
 	}
+	if got.LastFullReplaceAt == nil || !got.LastFullReplaceAt.Equal(full) {
+		t.Errorf("last_full_replace_at: got %v, want %v", got.LastFullReplaceAt, full)
+	}
 }
 
 func TestDatasetState_UpsertReplaces(t *testing.T) {
