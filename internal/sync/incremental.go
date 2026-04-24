@@ -206,6 +206,11 @@ func (s *IncrementalStrategy) delta(
 	}
 
 	// Build $where = "<hwm> > 'TS'", AND-combined with target.Effective.Where if set.
+	// Strict `>` (not `>=`): we store the exact max we observed, so any row updated
+	// at the same millisecond as our HWM after we read it would be missed. Acceptable
+	// in practice (Socrata timestamps are millisecond-resolution and bursts at the
+	// exact same instant are rare). A future phase could switch to `>=` and rely on
+	// PK-upsert idempotency to dedupe.
 	whereClause := ""
 	if state.HWMUpdatedAt != nil {
 		whereClause = fmt.Sprintf("%s > '%s'", hwmCol, state.HWMUpdatedAt.UTC().Format("2006-01-02T15:04:05.000"))
