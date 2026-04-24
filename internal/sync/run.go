@@ -58,7 +58,9 @@ func Run(ctx context.Context, cfg *config.Config, d Deps) (Summary, error) {
 		scheme = "https"
 	}
 	if d.Strategy == nil {
-		d.Strategy = &FullReplaceStrategy{Portal: cfg.Portal, Scheme: scheme, RunID: runID}
+		d.Strategy = &IncrementalStrategy{
+			Portal: cfg.Portal, Scheme: scheme, RunID: runID,
+		}
 	}
 
 	// Catalog: refresh if asked or cache empty.

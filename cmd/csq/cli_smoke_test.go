@@ -62,11 +62,18 @@ func startFakePortal(t *testing.T) *httptest.Server {
 		q := r.URL.Query()
 		offset, _ := strconv.Atoi(q.Get("$offset"))
 		limit, _ := strconv.Atoi(q.Get("$limit"))
+		selectClause := q.Get("$select")
+		includeSystem := selectClause == ":*,*"
 		rows := make([]map[string]any, 0)
 		for i := offset; i < offset+limit && i < 8; i++ {
-			rows = append(rows, map[string]any{
+			row := map[string]any{
 				"id": "r" + strconv.Itoa(i), "score": float64(i),
-			})
+			}
+			if includeSystem {
+				row[":id"] = "aaaa-0001-" + strconv.Itoa(i)
+				row[":updated_at"] = "2026-04-22T00:0" + strconv.Itoa(i%10) + ":00.000"
+			}
+			rows = append(rows, row)
 		}
 		_ = json.NewEncoder(w).Encode(rows)
 	})
