@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/neomantra/CivicSodaQuack/internal/config"
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
@@ -94,4 +95,223 @@ func TestIncremental_BootstrapInstallsPK(t *testing.T) {
 		!strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 		t.Errorf("unexpected error kind: %v", err)
 	}
+}
+
+// helper that runs an IncrementalStrategy against the fake portal and returns the result.
+func runIncr(t *testing.T, ds fakeDataset, w *duckdb.Writer, runID string, prevState *duckdb.DatasetState, mode string) DatasetResult {
+	t.Helper()
+	srv := newFakeSocrata(t, ds)
+	client := &socrata.Client{BatchSize: 10}
+	if prevState != nil {
+		_ = w.UpsertDatasetState(*prevState)
+	}
+	strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: runID}
+	target := DatasetTarget{ID: ds.ID,
+		Effective: config.Effective{
+			DatasetID: ds.ID, Table: "crimes", BatchSize: 10, Mode: mode,
+		}}
+	res, _ := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+	return res
+}
+
+func TestIncremental_DeltaInsert(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	// Bootstrap with 3 rows at 2026-04-22.
+	ds1 := mkIncrDataset("aaaa-0001", 3, "2026-04-22")
+	res1 := runIncr(t, ds1, w, "run1", nil, "")
+	if res1.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res1.Err)
+	}
+
+	// Second run: source now has 3 old rows + 2 new rows at 2026-04-23.
+	ds2 := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds aaaa-0001",
+		Columns: ds1.Columns,
+		Rows: append(append([]map[string]any{}, ds1.Rows...),
+			map[string]any{":id": "new-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(100)},
+			map[string]any{":id": "new-1", ":updated_at": "2026-04-23T00:00:01.000", "score": float64(101)},
+		),
+	}
+	res2 := runIncr(t, ds2, w, "run2", nil, "")
+	if res2.Status != "ok" {
+		t.Fatalf("delta: %v", res2.Err)
+	}
+
+	var n int
+	_ = w.DB.QueryRow(`SELECT COUNT(*) FROM main.crimes`).Scan(&n)
+	if n != 5 {
+		t.Errorf("count: got %d, want 5", n)
+	}
+
+	state, _ := w.ReadDatasetState("aaaa-0001")
+	if state.HWMUpdatedAt == nil || state.HWMUpdatedAt.Year() != 2026 || state.HWMUpdatedAt.Day() != 23 {
+		t.Errorf("HWM not advanced; got %v", state.HWMUpdatedAt)
+	}
+}
+
+func TestIncremental_DeltaUpdate(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	ds1 := mkIncrDataset("aaaa-0001", 1, "2026-04-22")
+	if res := runIncr(t, ds1, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+
+	// Same :id, newer :updated_at, different score.
+	ds2 := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds aaaa-0001",
+		Columns: ds1.Columns,
+		Rows: []map[string]any{
+			{":id": "aaaa-0001-0", ":updated_at": "2026-04-22T00:00:00.000", "score": float64(0)},
+			{":id": "aaaa-0001-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(999)},
+		},
+	}
+	if res := runIncr(t, ds2, w, "run2", nil, ""); res.Status != "ok" {
+		t.Fatalf("delta: %v", res.Err)
+	}
+
+	var n int
+	var score float64
+	_ = w.DB.QueryRow(`SELECT COUNT(*), MAX(score) FROM main.crimes`).Scan(&n, &score)
+	if n != 1 || score != 999 {
+		t.Errorf("upsert: count=%d score=%v want 1/999", n, score)
+	}
+}
+
+func TestIncremental_NoNewRows(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	ds := mkIncrDataset("aaaa-0001", 2, "2026-04-22")
+	res1 := runIncr(t, ds, w, "run1", nil, "")
+	if res1.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res1.Err)
+	}
+	state1, _ := w.ReadDatasetState("aaaa-0001")
+
+	// Second run with the same data — nothing newer than HWM.
+	res2 := runIncr(t, ds, w, "run2", nil, "")
+	if res2.Status != "ok" {
+		t.Fatalf("delta no-op: %v", res2.Err)
+	}
+	state2, _ := w.ReadDatasetState("aaaa-0001")
+	if !state2.HWMUpdatedAt.Equal(*state1.HWMUpdatedAt) {
+		t.Errorf("HWM moved: %v -> %v", state1.HWMUpdatedAt, state2.HWMUpdatedAt)
+	}
+	if state2.LastRunID != "run2" {
+		t.Errorf("LastRunID not bumped: %q", state2.LastRunID)
+	}
+}
+
+func TestIncremental_SchemaDriftFails(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	ds1 := mkIncrDataset("aaaa-0001", 1, "2026-04-22")
+	if res := runIncr(t, ds1, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+
+	// Drift: portal removes the score column.
+	ds2 := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds aaaa-0001",
+		Columns: []map[string]string{},
+		Rows: []map[string]any{
+			{":id": "new", ":updated_at": "2026-04-23T00:00:00.000"},
+		},
+	}
+	res2 := runIncr(t, ds2, w, "run2", nil, "")
+	if res2.Status != "failed" {
+		t.Errorf("status: got %q, want failed", res2.Status)
+	}
+	if res2.Err == nil || !containsAll(res2.Err.Error(), "schema drift", "score") {
+		t.Errorf("err: %v (want schema drift mentioning score)", res2.Err)
+	}
+}
+
+func TestIncremental_FullReplaceOptOut(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	ds1 := mkIncrDataset("aaaa-0001", 2, "2026-04-22")
+	if res := runIncr(t, ds1, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+	state1, _ := w.ReadDatasetState("aaaa-0001")
+
+	// Source totally different; mode=full_replace forces re-bootstrap.
+	ds2 := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds aaaa-0001",
+		Columns: ds1.Columns,
+		Rows: []map[string]any{
+			{":id": "fresh-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(7)},
+		},
+	}
+	res2 := runIncr(t, ds2, w, "run2", nil, "full_replace")
+	if res2.Status != "ok" {
+		t.Fatalf("opt-out: %v", res2.Err)
+	}
+
+	var n int
+	var first string
+	_ = w.DB.QueryRow(`SELECT COUNT(*), MIN(socrata_id) FROM main.crimes`).Scan(&n, &first)
+	if n != 1 || first != "fresh-0" {
+		t.Errorf("table not rebootstrapped: count=%d first=%q", n, first)
+	}
+	state2, _ := w.ReadDatasetState("aaaa-0001")
+	if !state2.LastFullReplaceAt.After(*state1.LastFullReplaceAt) {
+		t.Errorf("LastFullReplaceAt did not advance: %v -> %v",
+			state1.LastFullReplaceAt, state2.LastFullReplaceAt)
+	}
+}
+
+func TestIncremental_StreamFailMidPage(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	ds1 := mkIncrDataset("aaaa-0001", 2, "2026-04-22")
+	if res := runIncr(t, ds1, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+	state1, _ := w.ReadDatasetState("aaaa-0001")
+
+	// Second run: lots of new rows but the fake fails at offset 3.
+	// BatchSize must be < FailAtOffset so pagination actually hits the error.
+	rows := []map[string]any{
+		{":id": "x-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(0)},
+		{":id": "x-1", ":updated_at": "2026-04-23T00:00:01.000", "score": float64(1)},
+		{":id": "x-2", ":updated_at": "2026-04-23T00:00:02.000", "score": float64(2)},
+		{":id": "x-3", ":updated_at": "2026-04-23T00:00:03.000", "score": float64(3)},
+		{":id": "x-4", ":updated_at": "2026-04-23T00:00:04.000", "score": float64(4)},
+	}
+	ds2 := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds aaaa-0001", Columns: ds1.Columns,
+		Rows:         rows,
+		FailAtOffset: 3,
+	}
+	srv2 := newFakeSocrata(t, ds2)
+	strat2 := &IncrementalStrategy{Portal: fakeHost(srv2), Scheme: "http", RunID: "run2"}
+	target2 := DatasetTarget{ID: ds2.ID,
+		Effective: config.Effective{DatasetID: ds2.ID, Table: "crimes", BatchSize: 2}}
+	client2 := &socrata.Client{BatchSize: 2, MaxRetries: 1, RetryWait: time.Millisecond}
+	res2, _ := strat2.Sync(context.Background(), target2, client2, w, &RecordingReporter{}, 1, 1)
+	if res2.Status != "failed" {
+		t.Errorf("status: got %q, want failed", res2.Status)
+	}
+	state2, _ := w.ReadDatasetState("aaaa-0001")
+	if !state2.HWMUpdatedAt.Equal(*state1.HWMUpdatedAt) {
+		t.Errorf("HWM advanced on failure: %v -> %v", state1.HWMUpdatedAt, state2.HWMUpdatedAt)
+	}
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }

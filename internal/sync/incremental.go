@@ -5,6 +5,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
@@ -52,9 +53,7 @@ func (s *IncrementalStrategy) Sync(
 	if useBootstrap {
 		return s.bootstrap(ctx, target, client, w, prog, idx, total)
 	}
-	// Delta path lands in Task 10.
-	return failResult(target, "failed",
-		fmt.Errorf("incremental delta path not yet implemented")), nil
+	return s.delta(ctx, target, client, w, prog, idx, total, state)
 }
 
 func shouldBootstrap(state *duckdb.DatasetState, target DatasetTarget, w *duckdb.Writer) (bool, error) {
@@ -170,6 +169,120 @@ func (s *IncrementalStrategy) bootstrap(
 		result.Err = fmt.Errorf("write dataset_state: %w", err)
 	}
 	return result, nil
+}
+
+func (s *IncrementalStrategy) delta(
+	ctx context.Context,
+	target DatasetTarget,
+	client *socrata.Client,
+	w *duckdb.Writer,
+	prog ProgressReporter,
+	idx, total int,
+	state *duckdb.DatasetState,
+) (DatasetResult, error) {
+	started := time.Now().UTC()
+	prog.DatasetStart(idx, total, target)
+	result := DatasetResult{Target: target, StartedAt: started}
+
+	hwmCol := state.HWMColumn
+	if hwmCol == "" {
+		hwmCol = ":updated_at"
+	}
+
+	// Fetch metadata + check drift before any writes.
+	meta, err := fetchMetadata(ctx, client, s.scheme(), s.Portal, target.ID)
+	if err != nil {
+		return failResult(target, "failed", fmt.Errorf("fetch metadata: %w", err)), nil
+	}
+	cols := filterColumns(meta.Columns, target.Effective.SkipColumns)
+	wantSchema := duckdb.BuildSchemaWithSocrataID(target.Effective.Table, cols)
+
+	diffs, err := duckdb.DiffSchema(wantSchema, w.DB, "main", target.Effective.Table)
+	if err != nil {
+		return failResult(target, "failed", fmt.Errorf("diff schema: %w", err)), nil
+	}
+	if len(diffs) > 0 {
+		return failResult(target, "failed", schemaDriftError(target.Effective.Table, diffs)), nil
+	}
+
+	// Build $where = "<hwm> > 'TS'", AND-combined with target.Effective.Where if set.
+	whereClause := ""
+	if state.HWMUpdatedAt != nil {
+		whereClause = fmt.Sprintf("%s > '%s'", hwmCol, state.HWMUpdatedAt.UTC().Format("2006-01-02T15:04:05.000"))
+	}
+	if target.Effective.Where != "" {
+		if whereClause != "" {
+			whereClause = "(" + whereClause + ") AND (" + target.Effective.Where + ")"
+		} else {
+			whereClause = target.Effective.Where
+		}
+	}
+
+	// Compound order: hwmCol then :id, for stable pagination across same-timestamp rows.
+	orderBy := target.Effective.OrderBy
+	if orderBy == "" {
+		orderBy = hwmCol + ",:id"
+	}
+
+	var rowsWritten int64
+	maxHWM := state.HWMUpdatedAt
+	err = client.StreamRowsCtx(ctx, s.scheme(), s.Portal, target.ID,
+		orderBy, whereClause, ":*,*", target.Effective.Limit,
+		func(page []socrata.Row) error {
+			if err := w.UpsertRows("main", wantSchema, page); err != nil {
+				return err
+			}
+			for _, row := range page {
+				if t := extractRowHWM(row, hwmCol); t != nil {
+					if maxHWM == nil || t.After(*maxHWM) {
+						maxHWM = t
+					}
+				}
+			}
+			rowsWritten += int64(len(page))
+			prog.DatasetProgress(idx, total, target, rowsWritten)
+			return nil
+		},
+	)
+	if err != nil {
+		if ctx.Err() != nil {
+			return failResult(target, "aborted", ctx.Err()), nil
+		}
+		return failResult(target, "failed", err), nil
+	}
+
+	// Stream succeeded — persist new HWM (preserving last_full_replace_at).
+	state.HWMUpdatedAt = maxHWM
+	state.LastRunID = s.RunID
+	if err := w.UpsertDatasetState(*state); err != nil {
+		// Mirror bootstrap behavior: data is in main; surface as failed-state-write.
+		result.Status = "ok"
+		result.RowsWritten = rowsWritten
+		result.FinishedAt = time.Now().UTC()
+		result.Err = fmt.Errorf("write dataset_state: %w", err)
+		return result, nil
+	}
+
+	result.Status = "ok"
+	result.RowsWritten = rowsWritten
+	result.FinishedAt = time.Now().UTC()
+	return result, nil
+}
+
+func schemaDriftError(table string, diffs []duckdb.SchemaDiff) error {
+	parts := make([]string, 0, len(diffs))
+	for _, d := range diffs {
+		switch d.Kind {
+		case "added":
+			parts = append(parts, fmt.Sprintf("%s added", d.Column))
+		case "removed":
+			parts = append(parts, fmt.Sprintf("%s removed", d.Column))
+		case "retyped":
+			parts = append(parts, fmt.Sprintf("%s retyped from %s to %s", d.Column, d.Have, d.Want))
+		}
+	}
+	return fmt.Errorf("schema drift on %s: %s; set mode: full_replace in YAML to rebootstrap",
+		table, strings.Join(parts, ", "))
 }
 
 func extractRowHWM(row socrata.Row, hwmCol string) *time.Time {
