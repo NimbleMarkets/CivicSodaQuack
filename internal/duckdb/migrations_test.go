@@ -70,3 +70,36 @@ func TestApplyMigrations_Idempotent(t *testing.T) {
 		t.Fatalf("apply second time: %v", err)
 	}
 }
+
+func TestApply_CreatesDatasetStateTable(t *testing.T) {
+	w, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+
+	var n int
+	err = w.DB.QueryRow(
+		`SELECT COUNT(*) FROM information_schema.tables
+		 WHERE table_schema = '_csq' AND table_name = 'dataset_state'`,
+	).Scan(&n)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("dataset_state table missing")
+	}
+
+	// PK column should exist
+	err = w.DB.QueryRow(
+		`SELECT COUNT(*) FROM information_schema.columns
+		 WHERE table_schema = '_csq' AND table_name = 'dataset_state'
+		   AND column_name = 'dataset_id'`,
+	).Scan(&n)
+	if err != nil {
+		t.Fatalf("col query: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("dataset_id column missing")
+	}
+}

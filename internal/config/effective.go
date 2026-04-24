@@ -18,6 +18,8 @@ type Effective struct {
 	BatchSize   int
 	Limit       int
 	SkipColumns []string
+	Mode        string // "" | "incremental" | "full_replace"
+	HWMColumn   string // "" defaults to ":updated_at" at use sites
 }
 
 // EffectiveFor merges built-in defaults, cfg.Defaults, and cfg.Overrides[id].
@@ -51,6 +53,12 @@ func (c *Config) EffectiveFor(id string) Effective {
 	if len(ov.Columns.Skip) > 0 {
 		eff.SkipColumns = append([]string(nil), ov.Columns.Skip...)
 	}
+	if ov.Mode != "" {
+		eff.Mode = ov.Mode
+	}
+	if ov.HWMColumn != "" {
+		eff.HWMColumn = ov.HWMColumn
+	}
 	return eff
 }
 
@@ -64,7 +72,9 @@ func (e Effective) Hash() string {
 		BatchSize   int      `json:"batch_size"`
 		Limit       int      `json:"limit"`
 		SkipColumns []string `json:"skip_columns"`
-	}{e.Table, e.Where, e.OrderBy, e.BatchSize, e.Limit, e.SkipColumns}
+		Mode        string   `json:"mode"`
+		HWMColumn   string   `json:"hwm_column"`
+	}{e.Table, e.Where, e.OrderBy, e.BatchSize, e.Limit, e.SkipColumns, e.Mode, e.HWMColumn}
 	b, _ := json.Marshal(canonical)
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:])

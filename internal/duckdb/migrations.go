@@ -38,6 +38,13 @@ func Apply(db *sql.DB) error {
 			PRIMARY KEY (run_id, dataset_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS sync_runs_by_dataset ON _csq.sync_runs (dataset_id, started_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS _csq.dataset_state (
+			dataset_id           VARCHAR PRIMARY KEY,
+			hwm_updated_at       TIMESTAMP,
+			last_full_replace_at TIMESTAMP,
+			last_run_id          VARCHAR,
+			hwm_column           VARCHAR NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {

@@ -82,7 +82,7 @@ func (s *FullReplaceStrategy) Sync(
 	}
 
 	// 6. Swap into main.
-	if err := w.SwapIn(stagingName, target.Effective.Table); err != nil {
+	if err := w.SwapIn(stagingName, target.Effective.Table, ""); err != nil {
 		return fail(result, "failed", fmt.Errorf("swap: %w", err)), nil
 	}
 
@@ -134,7 +134,8 @@ func streamInto(
 	idx, total int,
 ) error {
 	return client.StreamRowsCtx(ctx, scheme, portal, target.ID,
-		target.Effective.OrderBy, target.Effective.Where, target.Effective.Limit,
+		target.Effective.OrderBy, target.Effective.Where, "",
+		target.Effective.Limit,
 		func(page []socrata.Row) error {
 			if err := w.InsertRowsInto("_csq_staging", schema, page); err != nil {
 				return err

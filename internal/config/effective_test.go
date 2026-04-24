@@ -72,3 +72,30 @@ func TestEffectiveFor_Hash_Deterministic(t *testing.T) {
 		t.Errorf("hash format: got %q", h1)
 	}
 }
+
+func TestEffectiveFor_ModeAndHWMColumnOverride(t *testing.T) {
+	cfg := &Config{
+		Defaults: Defaults{BatchSize: 100, OrderBy: ":id"},
+		Overrides: map[string]Override{
+			"a-a": {Mode: "full_replace", HWMColumn: ":created_at"},
+		},
+	}
+	eff := cfg.EffectiveFor("a-a")
+	if eff.Mode != "full_replace" {
+		t.Errorf("mode: got %q", eff.Mode)
+	}
+	if eff.HWMColumn != ":created_at" {
+		t.Errorf("hwm_column: got %q", eff.HWMColumn)
+	}
+}
+
+func TestEffectiveFor_ModeAndHWMColumnDefaults(t *testing.T) {
+	cfg := &Config{}
+	eff := cfg.EffectiveFor("missing")
+	if eff.Mode != "" {
+		t.Errorf("mode default: got %q, want empty", eff.Mode)
+	}
+	if eff.HWMColumn != "" {
+		t.Errorf("hwm_column default: got %q, want empty", eff.HWMColumn)
+	}
+}

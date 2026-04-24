@@ -24,8 +24,9 @@ type TargetColumn struct {
 
 // TableSchema is the set of TargetColumns for a dataset plus the target table name.
 type TableSchema struct {
-	Table   string
-	Columns []TargetColumn
+	Table      string
+	Columns    []TargetColumn
+	PrimaryKey string // optional; when set, emitted as table-level PRIMARY KEY in CreateTableSQL
 }
 
 // BuildSchema translates a Socrata dataset's columns into a DuckDB TableSchema.
@@ -76,6 +77,32 @@ func BuildSchema(table string, cols []socrata.Column) TableSchema {
 	return ts
 }
 
+// BuildSchemaWithSocrataID returns a TableSchema with the synthetic socrata_id
+// PRIMARY KEY column prepended. The socrata_id value is read from the row's :id
+// system field, which Phase 2 callers fetch via $select=:*,*.
+func BuildSchemaWithSocrataID(table string, cols []socrata.Column) TableSchema {
+	ts := BuildSchema(table, cols)
+	socrataIDCol := TargetColumn{
+		Name:    "socrata_id",
+		Type:    socrata.TypeVarchar,
+		Extract: extractSocrataID,
+	}
+	ts.Columns = append([]TargetColumn{socrataIDCol}, ts.Columns...)
+	ts.PrimaryKey = "socrata_id"
+	return ts
+}
+
+func extractSocrataID(row socrata.Row) (any, error) {
+	v, ok := row[":id"]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	if s, ok := v.(string); ok {
+		return s, nil
+	}
+	return fmt.Sprintf("%v", v), nil
+}
+
 // CreateTableSQL returns a CREATE TABLE statement for the schema.
 // Table and column names are double-quoted to tolerate reserved words.
 func (s TableSchema) CreateTableSQL() string {
@@ -86,6 +113,9 @@ func (s TableSchema) CreateTableSQL() string {
 			b.WriteString(", ")
 		}
 		fmt.Fprintf(&b, `"%s" %s`, c.Name, c.Type)
+	}
+	if s.PrimaryKey != "" {
+		fmt.Fprintf(&b, `, PRIMARY KEY ("%s")`, s.PrimaryKey)
 	}
 	b.WriteString(")")
 	return b.String()
@@ -121,6 +151,9 @@ func (s TableSchema) CreateTableSQLIn(schemaName string) string {
 			b.WriteString(", ")
 		}
 		fmt.Fprintf(&b, `"%s" %s`, c.Name, c.Type)
+	}
+	if s.PrimaryKey != "" {
+		fmt.Fprintf(&b, `, PRIMARY KEY ("%s")`, s.PrimaryKey)
 	}
 	b.WriteString(")")
 	return b.String()

@@ -19,7 +19,12 @@ func mkDataset(id string, rows int, failAt int) fakeDataset {
 			{"fieldName": "score", "dataTypeName": "number"},
 		},
 		Rows: makeRows(rows, func(i int) map[string]any {
-			return map[string]any{"id": id + "-" + itoa(i), "score": float64(i)}
+			return map[string]any{
+				":id":         id + "-" + itoa(i),
+				":updated_at": "2026-04-22T00:0" + itoa(i%10) + ":00.000",
+				"id":          id + "-" + itoa(i),
+				"score":       float64(i),
+			}
 		}),
 		FailAtOffset: failAt,
 	}

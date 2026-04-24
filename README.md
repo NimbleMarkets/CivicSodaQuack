@@ -5,7 +5,7 @@ surface for AI agents. See [AGENTS.md](./AGENTS.md) for the full project brief.
 
 ## Status
 
-**Phase 1** — catalog discovery + YAML-driven bulk sync into a per-portal DuckDB.
+**Phase 2** — incremental sync via per-dataset high-water marks. The first run of any dataset bootstraps with a full-replace; subsequent runs fetch only rows updated since the last successful sync.
 
 ## Quickstart
 
@@ -51,6 +51,9 @@ overrides:
     batch_size: 10000
     columns:
       skip: [location_description_raw]
+    # Phase 2 fields (both optional):
+    mode: full_replace        # force full-replace on every run; default is incremental
+    hwm_column: ":updated_at" # override the high-water-mark column
 ```
 
 Catalog and per-dataset sync history live in the `_csq` schema inside the portal's DuckDB:
@@ -59,6 +62,10 @@ Catalog and per-dataset sync history live in the `_csq` schema inside the portal
 SELECT id, name, category FROM _csq.catalog LIMIT 10;
 SELECT dataset_id, status, rows_written, duration_ms
   FROM _csq.sync_runs ORDER BY started_at DESC LIMIT 10;
+
+-- Per-dataset incremental-sync state (Phase 2)
+SELECT dataset_id, hwm_updated_at, last_full_replace_at, last_run_id
+  FROM _csq.dataset_state ORDER BY hwm_updated_at DESC;
 ```
 
 ## Layout

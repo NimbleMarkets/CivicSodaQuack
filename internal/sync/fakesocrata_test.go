@@ -4,8 +4,10 @@ package sync
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,18 +82,66 @@ func newFakeSocrata(t *testing.T, datasets ...fakeDataset) *httptest.Server {
 		q := r.URL.Query()
 		offset, _ := strconv.Atoi(q.Get("$offset"))
 		limit, _ := strconv.Atoi(q.Get("$limit"))
+		selectClause := q.Get("$select")
+		whereClause := q.Get("$where")
+		includeSystem := selectClause == ":*,*"
+
 		if d.FailAtOffset > 0 && offset >= d.FailAtOffset {
 			http.Error(w, "synthetic failure", 500)
 			return
 		}
+
+		// Apply $where filter if present
+		filtered := d.Rows
+		if whereClause != "" {
+			cutoff, ok := parseSimpleGreaterThan(whereClause)
+			if !ok {
+				http.Error(w, "fake portal: unsupported $where: "+whereClause, 400)
+				return
+			}
+			filtered = filtered[:0:0]
+			for _, row := range d.Rows {
+				ts, ok := row[":updated_at"].(string)
+				if !ok {
+					continue
+				}
+				if ts > cutoff { // string compare on ISO-8601 is order-preserving
+					filtered = append(filtered, row)
+				}
+			}
+		}
+
+		// Page slice
 		end := offset + limit
-		if end > len(d.Rows) {
-			end = len(d.Rows)
+		if end > len(filtered) {
+			end = len(filtered)
 		}
-		if offset > len(d.Rows) {
-			offset = len(d.Rows)
+		if offset > len(filtered) {
+			offset = len(filtered)
 		}
-		_ = json.NewEncoder(w).Encode(d.Rows[offset:end])
+		page := filtered[offset:end]
+
+		// Strip or include system fields per $select
+		out := make([]map[string]any, 0, len(page))
+		for i, row := range page {
+			cleaned := map[string]any{}
+			for k, v := range row {
+				if strings.HasPrefix(k, ":") {
+					if includeSystem {
+						cleaned[k] = v
+					}
+					continue
+				}
+				cleaned[k] = v
+			}
+			if includeSystem {
+				if _, has := cleaned[":id"]; !has {
+					cleaned[":id"] = fmt.Sprintf("%s-row-%d", d.ID, offset+i)
+				}
+			}
+			out = append(out, cleaned)
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -111,4 +161,18 @@ func makeRows(n int, mk func(i int) map[string]any) []map[string]any {
 		out[i] = mk(i)
 	}
 	return out
+}
+
+// parseSimpleGreaterThan recognises the single Phase 2 predicate shape:
+//
+//	<col> > '<value>'   (with surrounding whitespace ignored)
+//
+// Returns the value if matched. Anything else returns ok=false.
+func parseSimpleGreaterThan(where string) (string, bool) {
+	re := regexp.MustCompile(`^\s*[A-Za-z_:][A-Za-z0-9_:]*\s*>\s*'([^']*)'\s*$`)
+	m := re.FindStringSubmatch(where)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
 }
