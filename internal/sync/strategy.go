@@ -82,7 +82,7 @@ func (s *FullReplaceStrategy) Sync(
 	}
 
 	// 6. Swap into main.
-	if err := w.SwapIn(stagingName, target.Effective.Table); err != nil {
+	if err := w.SwapIn(stagingName, target.Effective.Table, ""); err != nil {
 		return fail(result, "failed", fmt.Errorf("swap: %w", err)), nil
 	}
 

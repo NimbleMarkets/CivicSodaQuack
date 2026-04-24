@@ -147,17 +147,8 @@ func (s *IncrementalStrategy) bootstrap(
 		return failResult(target, "failed", err), nil
 	}
 
-	if err := w.SwapIn(stagingName, target.Effective.Table); err != nil {
+	if err := w.SwapIn(stagingName, target.Effective.Table, schema.PrimaryKey); err != nil {
 		return failResult(target, "failed", fmt.Errorf("swap: %w", err)), nil
-	}
-
-	// CTAS doesn't preserve PRIMARY KEY constraints, so re-install after swap.
-	if schema.PrimaryKey != "" {
-		alterSQL := fmt.Sprintf(`ALTER TABLE main."%s" ADD PRIMARY KEY ("%s")`,
-			target.Effective.Table, schema.PrimaryKey)
-		if _, err := w.DB.ExecContext(ctx, alterSQL); err != nil {
-			return failResult(target, "failed", fmt.Errorf("install pk on %s: %w", target.Effective.Table, err)), nil
-		}
 	}
 
 	now := time.Now().UTC()

@@ -29,7 +29,7 @@ func TestSwapIn_ReplacesExistingTable(t *testing.T) {
 		t.Fatalf("staging rows: %v", err)
 	}
 
-	if err := w.SwapIn("foo_run1", "foo"); err != nil {
+	if err := w.SwapIn("foo_run1", "foo", ""); err != nil {
 		t.Fatalf("swap: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestSwapIn_CreatesNewTable(t *testing.T) {
 	if _, err := w.DB.Exec(`CREATE TABLE _csq_staging.bar_runX (v INT)`); err != nil {
 		t.Fatalf("staging: %v", err)
 	}
-	if err := w.SwapIn("bar_runX", "bar"); err != nil {
+	if err := w.SwapIn("bar_runX", "bar", ""); err != nil {
 		t.Fatalf("swap: %v", err)
 	}
 	var n int
@@ -69,5 +69,27 @@ func TestSwapIn_CreatesNewTable(t *testing.T) {
 	).Scan(&n)
 	if n != 1 {
 		t.Errorf("main.bar not created")
+	}
+}
+
+func TestSwapIn_ReinstallsPrimaryKey(t *testing.T) {
+	w, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+	if _, err := w.DB.Exec(`CREATE TABLE _csq_staging.t (id VARCHAR, v INT)`); err != nil {
+		t.Fatalf("staging: %v", err)
+	}
+	if _, err := w.DB.Exec(`INSERT INTO _csq_staging.t VALUES ('a', 1)`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := w.SwapIn("t", "t", "id"); err != nil {
+		t.Fatalf("swap: %v", err)
+	}
+	// Duplicate id should now violate PK.
+	_, err = w.DB.Exec(`INSERT INTO main.t VALUES ('a', 2)`)
+	if err == nil {
+		t.Errorf("PK not installed (duplicate insert succeeded)")
 	}
 }
