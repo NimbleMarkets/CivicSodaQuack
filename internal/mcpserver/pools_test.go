@@ -9,7 +9,7 @@ import (
 
 func makeEmptyCSQDB(t *testing.T, path string) {
 	t.Helper()
-	db, err := openDB(path)
+	db, err := openDB(path, false)
 	if err != nil {
 		t.Fatalf("open seed: %v", err)
 	}
@@ -44,8 +44,8 @@ func TestOpenPools_Success(t *testing.T) {
 	if _, ok := pools.Portals["test"]; !ok {
 		t.Errorf("portal 'test' missing")
 	}
-	if pools.Portals["test"].RO == nil || pools.Portals["test"].RW == nil {
-		t.Errorf("RO or RW pool nil")
+	if pools.Portals["test"].DB == nil {
+		t.Errorf("portal DB nil")
 	}
 	// Host should see the ATTACHed schema
 	var n int
@@ -65,7 +65,7 @@ func TestOpenPools_NotCSQDB(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wrong.duckdb")
 	// Open without seeding the _csq schema
-	db, err := openDB(path)
+	db, err := openDB(path, false)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -77,8 +77,7 @@ func TestOpenPools_NotCSQDB(t *testing.T) {
 	}
 }
 
-func TestOpenPools_DualWriteRead(t *testing.T) {
-	// Validates dual-pool design: write through RW pool, read through RO pool.
+func TestOpenPools_PortalDBReadsWrites(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.duckdb")
 	makeEmptyCSQDB(t, path)
@@ -89,29 +88,22 @@ func TestOpenPools_DualWriteRead(t *testing.T) {
 	}
 	defer pools.Close()
 
-	// Write via RW pool
-	_, err = pools.Portals["test"].RW.Exec(
+	// Write
+	_, err = pools.Portals["test"].DB.Exec(
 		`INSERT INTO _csq.catalog (id, name, fetched_at, raw)
 		 VALUES ('aaaa-0001', 'Test', NOW(), '{}')`)
 	if err != nil {
-		t.Fatalf("rw insert: %v", err)
+		t.Fatalf("insert: %v", err)
 	}
 
-	// Read via RO pool (will see the write since they share the same DuckDB file)
+	// Read
 	var name string
-	err = pools.Portals["test"].RO.QueryRow(
+	err = pools.Portals["test"].DB.QueryRow(
 		`SELECT name FROM _csq.catalog WHERE id = 'aaaa-0001'`).Scan(&name)
 	if err != nil {
-		t.Fatalf("ro read: %v", err)
+		t.Fatalf("select: %v", err)
 	}
 	if name != "Test" {
 		t.Errorf("got %q", name)
-	}
-
-	// RO pool must reject writes
-	_, err = pools.Portals["test"].RO.Exec(
-		`INSERT INTO _csq.catalog (id, name, fetched_at, raw) VALUES ('b', 'B', NOW(), '{}')`)
-	if err == nil {
-		t.Errorf("RO pool accepted a write")
 	}
 }
