@@ -110,3 +110,35 @@ func TestListDatasets_CategoryFilterCaseInsensitive(t *testing.T) {
 		t.Errorf("got %v, want [aaaa-0001]", []string(ids))
 	}
 }
+
+func TestListDatasets_TwoPortals(t *testing.T) {
+	dir := t.TempDir()
+	a := seedFixtureDB(t, dir, "a.duckdb",
+		FixtureDataset{ID: "aaaa-0001", Name: "A1"})
+	b := seedFixtureDB(t, dir, "b.duckdb",
+		FixtureDataset{ID: "bbbb-0002", Name: "B1"})
+	pools, err := OpenPools([]DBSpec{{Alias: "a", Path: a}, {Alias: "b", Path: b}})
+	if err != nil {
+		t.Fatalf("OpenPools: %v", err)
+	}
+	defer pools.Close()
+
+	got, err := listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 datasets, got %d", len(got))
+	}
+	// Find each by id and confirm portal alias is correct on each row
+	gotByID := map[string]string{}
+	for _, d := range got {
+		gotByID[d.DatasetID] = d.Portal
+	}
+	if gotByID["aaaa-0001"] != "a" {
+		t.Errorf("aaaa-0001 portal: got %q, want a", gotByID["aaaa-0001"])
+	}
+	if gotByID["bbbb-0002"] != "b" {
+		t.Errorf("bbbb-0002 portal: got %q, want b", gotByID["bbbb-0002"])
+	}
+}

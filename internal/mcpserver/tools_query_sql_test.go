@@ -117,3 +117,44 @@ func TestQuerySQL_CrossPortal(t *testing.T) {
 		t.Errorf("want 1 row, got %d", got.RowCount)
 	}
 }
+
+func TestQuerySQL_TruncatesByByteCap(t *testing.T) {
+	pools, cleanup := openFixturePools(t,
+		FixtureDataset{ID: "aaaa-0001", Name: "X"})
+	defer cleanup()
+
+	// Generate a small number of rows but with very large per-row payload
+	// so the byte cap (1MB) trips before the row cap (1000).
+	// repeat('x', N) produces an N-char string. 50 rows * ~30KB each = ~1.5MB.
+	got, err := querySQLHandler(context.Background(), pools,
+		QuerySQLArgs{SQL: `SELECT i AS n, repeat('x', 30000) AS payload FROM range(0, 50) t(i)`}, 5*time.Second)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if !got.Truncated {
+		t.Errorf("expected truncated=true at byte cap")
+	}
+	if got.RowCount >= 50 {
+		t.Errorf("expected fewer than 50 rows due to byte cap; got %d", got.RowCount)
+	}
+	if got.Note == "" {
+		t.Errorf("expected a note explaining truncation")
+	}
+}
+
+func TestQuerySQL_ParseErrorReturnsDuckDBMessage(t *testing.T) {
+	pools, cleanup := openFixturePools(t,
+		FixtureDataset{ID: "aaaa-0001", Name: "X"})
+	defer cleanup()
+
+	_, err := querySQLHandler(context.Background(), pools,
+		QuerySQLArgs{SQL: `THIS IS NOT VALID SQL AT ALL`}, time.Second)
+	if err == nil {
+		t.Fatal("want parse error")
+	}
+	// Must propagate the DuckDB error (not wrap it as a generic message)
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "parser") && !strings.Contains(msg, "syntax") {
+		t.Errorf("error should reflect DuckDB parser/syntax message; got: %v", err)
+	}
+}

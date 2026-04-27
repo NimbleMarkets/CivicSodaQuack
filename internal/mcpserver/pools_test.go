@@ -9,7 +9,7 @@ import (
 
 func makeEmptyCSQDB(t *testing.T, path string) {
 	t.Helper()
-	db, err := openDB(path, false)
+	db, err := openDB(path)
 	if err != nil {
 		t.Fatalf("open seed: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestOpenPools_NotCSQDB(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wrong.duckdb")
 	// Open without seeding the _csq schema
-	db, err := openDB(path, false)
+	db, err := openDB(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

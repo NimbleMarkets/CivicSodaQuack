@@ -5,7 +5,6 @@ package mcpserver
 import (
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -33,7 +32,7 @@ type Pools struct {
 // OpenPools opens the host and per-portal pools, ATTACHes each portal to the
 // host, and verifies each file is a CivicSodaQuack DuckDB.
 func OpenPools(specs []DBSpec) (*Pools, error) {
-	host, err := openDB(":memory:", false)
+	host, err := openDB(":memory:")
 	if err != nil {
 		return nil, fmt.Errorf("open host: %w", err)
 	}
@@ -48,7 +47,7 @@ func OpenPools(specs []DBSpec) (*Pools, error) {
 			p.Close()
 			return nil, fmt.Errorf("--db %s: %w", spec.Path, err)
 		}
-		db, err := openDB(spec.Path, false)
+		db, err := openDB(spec.Path)
 		if err != nil {
 			p.Close()
 			return nil, fmt.Errorf("open %s: %w", spec.Path, err)
@@ -89,14 +88,12 @@ func (p *Pools) Close() error {
 	return firstErr
 }
 
-// openDB opens a *sql.DB for path with the requested access mode. For
-// in-memory databases (path == ":memory:") access mode is ignored.
-func openDB(path string, readOnly bool) (*sql.DB, error) {
-	dsn := path
-	if path != ":memory:" && readOnly {
-		dsn = path + "?access_mode=READ_ONLY"
-	}
-	db, err := sql.Open("duckdb", dsn)
+// openDB opens a *sql.DB for the given path with read-write access.
+// Phase 3 uses a single writeable pool per portal; engine-level read-only
+// enforcement for user SQL happens at the host via BEGIN TRANSACTION READ ONLY
+// (see querySQLHandler).
+func openDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("duckdb", path)
 	if err != nil {
 		return nil, err
 	}
@@ -125,8 +122,6 @@ func assertIsCSQDB(db *sql.DB, path string) error {
 // escapeSQLString escapes single quotes so the path can be safely embedded in
 // a single-quoted DuckDB string literal.
 func escapeSQLString(s string) string {
-	// Belt-and-suspenders: also URL-quote anything weird; ATTACH accepts both.
-	_ = url.QueryEscape // used only via the import to avoid linter complaints
 	return replaceAll(s, "'", "''")
 }
 
