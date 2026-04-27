@@ -5,7 +5,7 @@ surface for AI agents. See [AGENTS.md](./AGENTS.md) for the full project brief.
 
 ## Status
 
-**Phase 2** — incremental sync via per-dataset high-water marks. The first run of any dataset bootstraps with a full-replace; subsequent runs fetch only rows updated since the last successful sync.
+**Phase 3** — MCP server. After syncing one or more portals into per-portal DuckDB files, run `csq mcp` to expose them to AI agents over stdio or HTTP.
 
 ## Quickstart
 
@@ -25,6 +25,22 @@ go build -o csq ./cmd/csq
 ```
 
 Set `SOCRATA_APP_TOKEN` (referenced in the YAML as `${SOCRATA_APP_TOKEN}`) to lift anonymous rate limits.
+
+### Serve via MCP
+
+```bash
+# Stdio (default; for local agent integrations)
+./csq mcp --db data.cityofchicago.org.duckdb
+
+# Multi-portal with explicit alias
+./csq mcp --db chicago=data.cityofchicago.org.duckdb \
+          --db nyc=data.cityofnewyork.us.duckdb
+
+# HTTP (for remote agents; bind to loopback by default)
+./csq mcp --db data.cityofchicago.org.duckdb --http 127.0.0.1:8080
+```
+
+The MCP server exposes four tools: `list_datasets`, `describe_dataset`, `search_datasets`, and `query_sql`. The `query_sql` tool runs read-only DuckDB SQL across every attached portal; cross-portal queries use `<alias>.<schema>.<table>`, e.g. `SELECT * FROM chicago._csq.catalog UNION ALL SELECT * FROM nyc._csq.catalog`. Results are capped at 1000 rows / 1MB / 30s.
 
 ### Config shape
 
@@ -71,9 +87,12 @@ SELECT dataset_id, hwm_updated_at, last_full_replace_at, last_run_id
 ## Layout
 
 ```
-cmd/csq/              # CLI entrypoint (extract subcommand)
+cmd/csq/              # CLI entrypoint
 internal/socrata/     # SODA2 client: metadata + paginated row streaming
 internal/duckdb/      # DuckDB writer + Socrata→DuckDB schema mapping
+internal/config/      # YAML loader + per-dataset effective config
+internal/sync/        # Sync orchestrator + strategies (FullReplace, Incremental)
+internal/mcpserver/   # MCP server: pools, ATTACH, tools, transports
 ```
 
 ## License

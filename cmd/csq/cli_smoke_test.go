@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
@@ -199,6 +201,98 @@ func TestCSQ_IncrementalSmoke(t *testing.T) {
 	if n != 1 {
 		t.Errorf("dataset_state row missing")
 	}
+}
+
+func TestCSQ_MCP_Stdio_Smoke(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "smoke.duckdb")
+
+	// Build a minimal _csq.catalog so the file is recognised as a CSQ DuckDB.
+	{
+		db, err := sql.Open("duckdb", dbPath)
+		if err != nil {
+			t.Fatalf("seed open: %v", err)
+		}
+		stmts := []string{
+			`CREATE SCHEMA _csq`,
+			`CREATE TABLE _csq.catalog (
+				id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL,
+				description VARCHAR, category VARCHAR, tags JSON,
+				row_count BIGINT, updated_at TIMESTAMP,
+				fetched_at TIMESTAMP NOT NULL, raw JSON NOT NULL)`,
+			`INSERT INTO _csq.catalog (id, name, fetched_at, raw)
+			 VALUES ('aaaa-0001', 'Smoke', NOW(), '{}')`,
+		}
+		for _, s := range stmts {
+			if _, err := db.Exec(s); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+		}
+		db.Close()
+	}
+
+	cmd := exec.Command(os.Getenv("CSQ_BIN"), "mcp", "--db", dbPath)
+	stdinW, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin: %v", err)
+	}
+	stdoutR, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	// Send initialize, then tools/list. Each request is one JSON object per line.
+	send := func(s string) {
+		if _, err := io.WriteString(stdinW, s+"\n"); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+	}
+	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}`)
+	send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
+
+	// Read responses until we see all four tool names or hit the timeout.
+	deadline := time.Now().Add(5 * time.Second)
+	buf := make([]byte, 0, 64*1024)
+	tmp := make([]byte, 8*1024)
+	for time.Now().Before(deadline) {
+		_ = setReadDeadline(stdoutR, time.Now().Add(500*time.Millisecond))
+		n, _ := stdoutR.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+		}
+		got := string(buf)
+		all := true
+		for _, name := range []string{"list_datasets", "describe_dataset", "search_datasets", "query_sql"} {
+			if !strings.Contains(got, name) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for tools/list response\nstdout so far:\n%s\nstderr:\n%s", string(buf), stderr.String())
+}
+
+// setReadDeadline is a no-op when r doesn't support it (os.Pipe doesn't).
+// We poll with short reads instead.
+func setReadDeadline(r interface{}, t time.Time) error {
+	type deadlineReader interface{ SetReadDeadline(time.Time) error }
+	if dr, ok := r.(deadlineReader); ok {
+		return dr.SetReadDeadline(t)
+	}
+	return nil
 }
 
 func TestCSQ_SyncSmoke(t *testing.T) {

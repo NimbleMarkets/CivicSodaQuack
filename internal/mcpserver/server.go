@@ -1,0 +1,144 @@
+// Copyright (c) 2026 Neomantra Corp
+
+package mcpserver
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// queryTimeout is the per-query timeout enforced by query_sql.
+const queryTimeout = 30 * time.Second
+
+// Options configures the MCP server.
+type Options struct {
+	DBs      []DBSpec // resolved (alias, path) pairs; required, non-empty
+	HTTPAddr string   // empty means stdio; non-empty switches to HTTP
+}
+
+// Serve constructs the server, opens pools, registers all tools, and runs the
+// chosen transport. Blocks until the context is cancelled or the transport
+// returns. Pools are closed before returning.
+func Serve(ctx context.Context, opts Options) error {
+	pools, err := OpenPools(opts.DBs)
+	if err != nil {
+		return err
+	}
+	defer pools.Close()
+
+	srv, err := buildServer(pools)
+	if err != nil {
+		return err
+	}
+
+	if opts.HTTPAddr != "" {
+		return runHTTP(ctx, srv, opts.HTTPAddr)
+	}
+	return srv.Run(ctx, &mcp.StdioTransport{})
+}
+
+// DatasetList wraps a slice of DatasetSummary so the MCP output schema has
+// type "object" (the spec requires the output schema root to be an object).
+type DatasetList struct {
+	Datasets []DatasetSummary `json:"datasets"`
+}
+
+// buildServer creates an *mcp.Server and registers all four tools with the
+// given pools captured in the handler closures.
+func buildServer(pools *Pools) (*mcp.Server, error) {
+	srv := mcp.NewServer(&mcp.Implementation{
+		Name:    "civicsodaquack",
+		Version: "0.3.0",
+	}, nil)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "list_datasets",
+		Description: "List datasets available across attached portal DuckDB files. Use the optional 'portal' or 'category' filters to narrow the result.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args ListDatasetsArgs) (*mcp.CallToolResult, DatasetList, error) {
+		out, err := listDatasetsHandler(ctx, pools, args)
+		if err != nil {
+			return nil, DatasetList{}, err
+		}
+		return &mcp.CallToolResult{}, DatasetList{Datasets: out}, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "describe_dataset",
+		Description: "Return columns, last sync info, and tags for one dataset. Pass 'portal' if dataset_id is ambiguous across portals.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args DescribeDatasetArgs) (*mcp.CallToolResult, DatasetDetail, error) {
+		out, err := describeDatasetHandler(ctx, pools, args)
+		if err != nil {
+			return nil, DatasetDetail{}, err
+		}
+		return &mcp.CallToolResult{}, out, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "search_datasets",
+		Description: "Substring match on dataset name, description, and tags (case-insensitive).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args SearchDatasetsArgs) (*mcp.CallToolResult, DatasetList, error) {
+		out, err := searchDatasetsHandler(ctx, pools, args)
+		if err != nil {
+			return nil, DatasetList{}, err
+		}
+		return &mcp.CallToolResult{}, DatasetList{Datasets: out}, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "query_sql",
+		Description: "Run a read-only DuckDB SELECT across all attached portals. Cross-portal queries: <alias>.<schema>.<table>. Capped at 1000 rows / 1MB / 30s.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args QuerySQLArgs) (*mcp.CallToolResult, QuerySQLResult, error) {
+		out, err := querySQLHandler(ctx, pools, args, queryTimeout)
+		if err != nil {
+			return nil, QuerySQLResult{}, err
+		}
+		// Provide a text-content rendering as well, for clients that don't
+		// process structured output.
+		body, _ := json.Marshal(out)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+		}, out, nil
+	})
+
+	return srv, nil
+}
+
+// newHTTPHandler returns an http.Handler that serves the given MCP server via
+// the SDK's StreamableHTTP transport in stateless mode, which skips the
+// session-ID handshake and uses default initialization parameters. This makes
+// it easier to call from simple HTTP clients and test harnesses.
+func newHTTPHandler(srv *mcp.Server) http.Handler {
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return srv
+	}, &mcp.StreamableHTTPOptions{Stateless: true})
+}
+
+// runHTTP listens on addr and serves the MCP server over HTTP. Blocks until ctx
+// is cancelled or the listener errors.
+func runHTTP(ctx context.Context, srv *mcp.Server, addr string) error {
+	httpsrv := &http.Server{
+		Addr:    addr,
+		Handler: newHTTPHandler(srv),
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- httpsrv.ListenAndServe() }()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpsrv.Shutdown(shutdownCtx)
+		return nil
+	case err := <-errCh:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return fmt.Errorf("http listen %s: %w", addr, err)
+	}
+}
