@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/duckdb/duckdb-go/v2 v2.5.4
+	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/oklog/ulid/v2 v2.1.0
 	github.com/spf13/pflag v1.0.6
 	golang.org/x/sync v0.19.0
@@ -27,7 +28,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.5.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
