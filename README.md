@@ -5,7 +5,7 @@ surface for AI agents. See [AGENTS.md](./AGENTS.md) for the full project brief.
 
 ## Status
 
-**Phase 3** — MCP server. After syncing one or more portals into per-portal DuckDB files, run `csq mcp` to expose them to AI agents over stdio or HTTP.
+**Phase 4** — snapshot publishing. After syncing one or more portals into per-portal DuckDB files, run `csq snapshot` to package one as a `.tar.zst` for distribution; consume with `csq fetch --from <url>`.
 
 ## Quickstart
 
@@ -41,6 +41,27 @@ Set `SOCRATA_APP_TOKEN` (referenced in the YAML as `${SOCRATA_APP_TOKEN}`) to li
 ```
 
 The MCP server exposes four tools: `list_datasets`, `describe_dataset`, `search_datasets`, and `query_sql`. The `query_sql` tool runs read-only DuckDB SQL across every attached portal; cross-portal queries use `<alias>.<schema>.<table>`, e.g. `SELECT * FROM chicago._csq.catalog UNION ALL SELECT * FROM nyc._csq.catalog`. Results are capped at 1000 rows / 1MB / 30s.
+
+### Distribute via snapshot
+
+Package an existing synced DuckDB into a portable tarball:
+
+```bash
+./csq snapshot --db data.cityofchicago.org.duckdb \
+               --output chicago-2026-04-23.tar.zst
+```
+
+The tarball contains a `manifest.json` (portal, snapshot id, dataset/row counts, SHA-256 of the DuckDB) and the DuckDB file itself, all zstd-compressed.
+
+Upload the tarball anywhere your agents can reach (S3, GitHub Releases, an internal CDN, a local file). To restore on another host:
+
+```bash
+./csq fetch --from https://example.com/snapshots/chicago-2026-04-23.tar.zst
+# or
+./csq fetch --from file:///path/to/chicago-2026-04-23.tar.zst
+```
+
+`csq fetch` verifies the SHA-256 against the manifest before declaring success. Pass `--no-verify` to skip (not recommended).
 
 ### Config shape
 
@@ -93,6 +114,7 @@ internal/duckdb/      # DuckDB writer + Socrata→DuckDB schema mapping
 internal/config/      # YAML loader + per-dataset effective config
 internal/sync/        # Sync orchestrator + strategies (FullReplace, Incremental)
 internal/mcpserver/   # MCP server: pools, ATTACH, tools, transports
+internal/snapshot/    # Snapshot publishing: tar+zst format, Pack producer, Fetch consumer
 ```
 
 ## License
