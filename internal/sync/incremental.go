@@ -231,6 +231,7 @@ func (s *IncrementalStrategy) delta(
 
 	var rowsWritten int64
 	maxHWM := state.HWMUpdatedAt
+	pageIdx := 0
 	err = client.StreamRowsCtx(ctx, s.scheme(), s.Portal, target.ID,
 		orderBy, whereClause, ":*,*", target.Effective.Limit,
 		func(page []socrata.Row) error {
@@ -245,6 +246,20 @@ func (s *IncrementalStrategy) delta(
 				}
 			}
 			rowsWritten += int64(len(page))
+			pageIdx++
+			if n := target.Effective.CheckpointEveryNPages; n > 0 && pageIdx%n == 0 {
+				// Best-effort mid-stream HWM checkpoint. A failure here is logged
+				// but not fatal: the page's data has already been committed
+				// (UpsertRows above), and the next checkpoint or the final
+				// HWM-on-success write will catch up.
+				_ = w.UpsertDatasetState(duckdb.DatasetState{
+					DatasetID:         target.ID,
+					HWMUpdatedAt:      maxHWM,
+					LastFullReplaceAt: state.LastFullReplaceAt,
+					LastRunID:         s.RunID,
+					HWMColumn:         hwmCol,
+				})
+			}
 			prog.DatasetProgress(idx, total, target, rowsWritten)
 			return nil
 		},
