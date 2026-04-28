@@ -99,3 +99,27 @@ func TestEffectiveFor_ModeAndHWMColumnDefaults(t *testing.T) {
 		t.Errorf("hwm_column default: got %q, want empty", eff.HWMColumn)
 	}
 }
+
+func TestEffectiveFor_CheckpointEveryNPages(t *testing.T) {
+	cfg := &Config{
+		Overrides: map[string]Override{
+			"a-a": {CheckpointEveryNPages: 100},
+		},
+	}
+	eff := cfg.EffectiveFor("a-a")
+	if eff.CheckpointEveryNPages != 100 {
+		t.Errorf("got %d, want 100", eff.CheckpointEveryNPages)
+	}
+	eff2 := cfg.EffectiveFor("missing")
+	if eff2.CheckpointEveryNPages != 0 {
+		t.Errorf("default: got %d, want 0", eff2.CheckpointEveryNPages)
+	}
+}
+
+func TestEffectiveFor_Hash_IncludesCheckpoint(t *testing.T) {
+	a := Effective{Table: "t", BatchSize: 100, CheckpointEveryNPages: 0}.Hash()
+	b := Effective{Table: "t", BatchSize: 100, CheckpointEveryNPages: 50}.Hash()
+	if a == b {
+		t.Errorf("hash should differ when CheckpointEveryNPages changes")
+	}
+}
