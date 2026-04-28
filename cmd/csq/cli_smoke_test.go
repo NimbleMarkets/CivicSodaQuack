@@ -415,3 +415,143 @@ func TestCSQ_Snapshot_RoundTrip_Smoke(t *testing.T) {
 		t.Errorf("restored catalog rows: got %d, want 2", n)
 	}
 }
+
+func TestCSQ_Sync_FullRefresh_Smoke(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.duckdb")
+	cfgPath := filepath.Join(dir, "portal.yaml")
+
+	rows := []map[string]any{
+		{":id": "smoke-0", ":updated_at": "2026-04-22T00:00:00.000", "id": "smoke-0", "score": float64(0)},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/catalog/v1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{{
+				"resource":       map[string]any{"id": "aaaa-0001", "name": "Smoke", "rowsUpdatedAt": "2026-04-22T00:00:00.000"},
+				"classification": map[string]any{"domain_category": "Test", "domain_tags": []string{"smoke"}},
+			}},
+			"resultSetSize": 1,
+		})
+	})
+	mux.HandleFunc("/api/views/aaaa-0001.json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "aaaa-0001", "name": "Smoke",
+			"columns": []map[string]string{
+				{"fieldName": "id", "dataTypeName": "text"},
+				{"fieldName": "score", "dataTypeName": "number"},
+			},
+		})
+	})
+	mux.HandleFunc("/resource/aaaa-0001.json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(rows)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+
+	tpl, _ := os.ReadFile("testdata/portal.yaml.tmpl")
+	yaml := strings.ReplaceAll(string(tpl), "{{HOST}}", host)
+	yaml = strings.ReplaceAll(yaml, "{{DB}}", dbPath)
+	_ = os.WriteFile(cfgPath, []byte(yaml), 0o644)
+
+	cmd := exec.Command(os.Getenv("CSQ_BIN"), "sync", "--config", cfgPath)
+	cmd.Env = append(os.Environ(), "CSQ_SCHEME=http")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+
+	db, _ := sql.Open("duckdb", dbPath)
+	var first1 time.Time
+	_ = db.QueryRow(`SELECT last_full_replace_at FROM _csq.dataset_state WHERE dataset_id = 'aaaa-0001'`).Scan(&first1)
+	db.Close()
+
+	time.Sleep(20 * time.Millisecond)
+
+	cmd2 := exec.Command(os.Getenv("CSQ_BIN"), "sync", "--config", cfgPath,
+		"--full-refresh", "aaaa-0001")
+	cmd2.Env = append(os.Environ(), "CSQ_SCHEME=http")
+	var stderr2 bytes.Buffer
+	cmd2.Stderr = &stderr2
+	if err := cmd2.Run(); err != nil {
+		t.Fatalf("full-refresh sync: %v\nstderr:\n%s", err, stderr2.String())
+	}
+
+	db, _ = sql.Open("duckdb", dbPath)
+	defer db.Close()
+	var second1 time.Time
+	_ = db.QueryRow(`SELECT last_full_replace_at FROM _csq.dataset_state WHERE dataset_id = 'aaaa-0001'`).Scan(&second1)
+	if !second1.After(first1) {
+		t.Errorf("LastFullReplaceAt should advance: was=%v now=%v", first1, second1)
+	}
+}
+
+func TestCSQ_LockContention_Smoke(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "lock.duckdb")
+	cfgPath := filepath.Join(dir, "portal.yaml")
+
+	{
+		db, _ := sql.Open("duckdb", dbPath)
+		_, _ = db.Exec(`CREATE SCHEMA _csq`)
+		_, _ = db.Exec(`CREATE TABLE _csq.catalog (
+			id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL,
+			description VARCHAR, category VARCHAR, tags JSON,
+			row_count BIGINT, updated_at TIMESTAMP,
+			fetched_at TIMESTAMP NOT NULL, raw JSON NOT NULL)`)
+		db.Close()
+	}
+
+	yaml := `portal: example.invalid
+db: ` + dbPath + `
+on_error: continue
+concurrency: 1
+defaults:
+  batch_size: 5
+  order_by: ":id"
+include:
+  - category: "X"
+`
+	_ = os.WriteFile(cfgPath, []byte(yaml), 0o644)
+
+	mcp := exec.Command(os.Getenv("CSQ_BIN"), "mcp", "--db", dbPath)
+	mcpStdin, _ := mcp.StdinPipe()
+	if err := mcp.Start(); err != nil {
+		t.Fatalf("start mcp: %v", err)
+	}
+	defer func() {
+		_ = mcp.Process.Kill()
+		_ = mcp.Wait()
+	}()
+
+	lockPath := dbPath + ".lock"
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(lockPath); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	sync1 := exec.Command(os.Getenv("CSQ_BIN"), "sync", "--config", cfgPath)
+	var stderr1 bytes.Buffer
+	sync1.Stderr = &stderr1
+	if err := sync1.Run(); err == nil {
+		t.Fatalf("expected sync to fail while mcp holds lock; stderr=%s", stderr1.String())
+	}
+	if !strings.Contains(stderr1.String(), "locked") {
+		t.Errorf("expected 'locked' in stderr; got: %s", stderr1.String())
+	}
+
+	_ = mcpStdin.Close()
+	_ = mcp.Process.Kill()
+	_ = mcp.Wait()
+
+	sync2 := exec.Command(os.Getenv("CSQ_BIN"), "sync", "--config", cfgPath)
+	var stderr2 bytes.Buffer
+	sync2.Stderr = &stderr2
+	_ = sync2.Run()
+	if strings.Contains(stderr2.String(), "locked") {
+		t.Errorf("after killing mcp, sync should not see lock error; got: %s", stderr2.String())
+	}
+}
