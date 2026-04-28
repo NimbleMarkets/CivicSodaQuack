@@ -31,6 +31,11 @@ type Deps struct {
 	Only           []string // --only IDs
 	DryRun         bool
 	RefreshCatalog bool
+	// FullRefreshIDs forces matching dataset IDs to bootstrap (Mode=full_replace)
+	// for this run. Mutually exclusive with FullRefreshAll.
+	FullRefreshIDs []string
+	// FullRefreshAll forces every resolved dataset to bootstrap for this run.
+	FullRefreshAll bool
 }
 
 // Summary is the end-of-run tally.
@@ -87,6 +92,33 @@ func Run(ctx context.Context, cfg *config.Config, d Deps) (Summary, error) {
 		return sum, err
 	}
 	sum.Planned = len(targets)
+
+	if d.FullRefreshAll && len(d.FullRefreshIDs) > 0 {
+		return sum, errors.New("FullRefreshAll and FullRefreshIDs are mutually exclusive")
+	}
+	if len(d.FullRefreshIDs) > 0 {
+		resolved := make(map[string]struct{}, len(targets))
+		for _, t := range targets {
+			resolved[t.ID] = struct{}{}
+		}
+		refreshSet := make(map[string]struct{}, len(d.FullRefreshIDs))
+		for _, id := range d.FullRefreshIDs {
+			if _, ok := resolved[id]; !ok {
+				return sum, fmt.Errorf("--full-refresh %s: not in resolved selector set", id)
+			}
+			refreshSet[id] = struct{}{}
+		}
+		for i := range targets {
+			if _, ok := refreshSet[targets[i].ID]; ok {
+				targets[i].Effective.Mode = "full_replace"
+			}
+		}
+	}
+	if d.FullRefreshAll {
+		for i := range targets {
+			targets[i].Effective.Mode = "full_replace"
+		}
+	}
 
 	if d.DryRun {
 		sum.Wall = time.Since(started)
