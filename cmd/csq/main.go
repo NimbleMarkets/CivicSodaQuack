@@ -27,18 +27,22 @@ const usage = `csq — CivicSodaQuack
 Usage:
   csq extract  --portal <host> --dataset <4x4> [options]
   csq catalog  --portal <host> [--refresh] [--json] [--output FILE]
-  csq sync     --config <portal.yaml> [--dry-run] [--only IDs]
+  csq sync     --config <portal.yaml> [--dry-run] [--only IDs] [--full-refresh ID ...] [--full-refresh-all]
   csq mcp      --db <portal.duckdb> [--db ...] [--http <addr>]
   csq snapshot --db <portal.duckdb> --output <snap.tar.zst> [--portal NAME] [--force]
   csq fetch    --from <url> [--output <path.duckdb>] [--no-verify] [--force]
 
+All subcommands except 'fetch' acquire <dbpath>.lock (advisory flock).
+Pass --no-lock to bypass or --lock-wait <duration> to retry.
+
 Examples:
   csq extract  --portal data.cityofchicago.org --dataset 6zsd-86xi --limit 10000
   csq catalog  --portal data.cityofchicago.org --category "Public Safety"
-  csq sync     --config data.cityofchicago.org.yaml
+  csq sync     --config data.cityofchicago.org.yaml --full-refresh 6zsd-86xi
+  csq sync     --config data.cityofchicago.org.yaml --full-refresh-all --lock-wait 30s
   csq mcp      --db data.cityofchicago.org.duckdb
-  csq snapshot --db data.cityofchicago.org.duckdb --output chicago-2026-04-23.tar.zst
-  csq fetch    --from https://example.com/snapshots/chicago-2026-04-23.tar.zst
+  csq snapshot --db data.cityofchicago.org.duckdb --output chicago-2026-04-28.tar.zst
+  csq fetch    --from https://example.com/snapshots/chicago-2026-04-28.tar.zst
 `
 
 func main() {
