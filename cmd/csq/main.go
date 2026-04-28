@@ -24,16 +24,20 @@ import (
 const usage = `csq — CivicSodaQuack
 
 Usage:
-  csq extract --portal <host> --dataset <4x4> [options]
-  csq catalog --portal <host> [--refresh] [--json] [--output FILE]
-  csq sync    --config <portal.yaml> [--dry-run] [--only IDs]
-  csq mcp     --db <portal.duckdb> [--db ...] [--http <addr>]
+  csq extract  --portal <host> --dataset <4x4> [options]
+  csq catalog  --portal <host> [--refresh] [--json] [--output FILE]
+  csq sync     --config <portal.yaml> [--dry-run] [--only IDs]
+  csq mcp      --db <portal.duckdb> [--db ...] [--http <addr>]
+  csq snapshot --db <portal.duckdb> --output <snap.tar.zst> [--portal NAME] [--force]
+  csq fetch    --from <url> [--output <path.duckdb>] [--no-verify] [--force]
 
 Examples:
-  csq extract --portal data.cityofchicago.org --dataset 6zsd-86xi --limit 10000
-  csq catalog --portal data.cityofchicago.org --category "Public Safety"
-  csq sync    --config data.cityofchicago.org.yaml
-  csq mcp     --db data.cityofchicago.org.duckdb --db nyc=data.cityofnewyork.us.duckdb
+  csq extract  --portal data.cityofchicago.org --dataset 6zsd-86xi --limit 10000
+  csq catalog  --portal data.cityofchicago.org --category "Public Safety"
+  csq sync     --config data.cityofchicago.org.yaml
+  csq mcp      --db data.cityofchicago.org.duckdb
+  csq snapshot --db data.cityofchicago.org.duckdb --output chicago-2026-04-23.tar.zst
+  csq fetch    --from https://example.com/snapshots/chicago-2026-04-23.tar.zst
 `
 
 func main() {
@@ -60,6 +64,16 @@ func main() {
 	case "mcp":
 		if err := runMCP(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "csq mcp: %v\n", err)
+			os.Exit(1)
+		}
+	case "snapshot":
+		if err := runSnapshot(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq snapshot: %v\n", err)
+			os.Exit(1)
+		}
+	case "fetch":
+		if err := runFetch(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq fetch: %v\n", err)
 			os.Exit(1)
 		}
 	case "-h", "--help", "help":
