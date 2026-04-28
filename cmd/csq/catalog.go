@@ -14,6 +14,7 @@ import (
 	flag "github.com/spf13/pflag"
 
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
+	"github.com/neomantra/CivicSodaQuack/internal/portallock"
 	"github.com/neomantra/CivicSodaQuack/internal/socrata"
 )
 
@@ -27,6 +28,8 @@ func runCatalog(args []string) error {
 		asJSON   bool
 		output   string
 		force    bool
+		noLock   bool
+		lockWait time.Duration
 	)
 	var ids, names, cats, tags []string
 
@@ -41,6 +44,9 @@ func runCatalog(args []string) error {
 	fs.StringArrayVar(&names, "name", nil, "Glob match on name (repeatable)")
 	fs.StringArrayVar(&cats, "category", nil, "Glob match on category (repeatable)")
 	fs.StringArrayVar(&tags, "tag", nil, "Glob match on tag (repeatable)")
+	fs.BoolVar(&noLock, "no-lock", false, "Skip portal lock acquisition")
+	fs.DurationVar(&lockWait, "lock-wait", 0,
+		"Retry lock acquisition for up to this duration before giving up")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -51,6 +57,12 @@ func runCatalog(args []string) error {
 	if dbPath == "" {
 		dbPath = portal + ".duckdb"
 	}
+
+	lock, err := portallock.Acquire(dbPath, portallock.Options{NoLock: noLock, LockWait: lockWait})
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
 	w, err := duckdb.Open(dbPath)
 	if err != nil {

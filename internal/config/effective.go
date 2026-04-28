@@ -20,6 +20,8 @@ type Effective struct {
 	SkipColumns []string
 	Mode        string // "" | "incremental" | "full_replace"
 	HWMColumn   string // "" defaults to ":updated_at" at use sites
+	// CheckpointEveryNPages, when > 0, persists running HWM every N delta pages.
+	CheckpointEveryNPages int
 }
 
 // EffectiveFor merges built-in defaults, cfg.Defaults, and cfg.Overrides[id].
@@ -59,6 +61,9 @@ func (c *Config) EffectiveFor(id string) Effective {
 	if ov.HWMColumn != "" {
 		eff.HWMColumn = ov.HWMColumn
 	}
+	if ov.CheckpointEveryNPages != 0 {
+		eff.CheckpointEveryNPages = ov.CheckpointEveryNPages
+	}
 	return eff
 }
 
@@ -66,15 +71,16 @@ func (c *Config) EffectiveFor(id string) Effective {
 // in _csq.sync_runs.config_hash.
 func (e Effective) Hash() string {
 	canonical := struct {
-		Table       string   `json:"table"`
-		Where       string   `json:"where"`
-		OrderBy     string   `json:"order_by"`
-		BatchSize   int      `json:"batch_size"`
-		Limit       int      `json:"limit"`
-		SkipColumns []string `json:"skip_columns"`
-		Mode        string   `json:"mode"`
-		HWMColumn   string   `json:"hwm_column"`
-	}{e.Table, e.Where, e.OrderBy, e.BatchSize, e.Limit, e.SkipColumns, e.Mode, e.HWMColumn}
+		Table                 string   `json:"table"`
+		Where                 string   `json:"where"`
+		OrderBy               string   `json:"order_by"`
+		BatchSize             int      `json:"batch_size"`
+		Limit                 int      `json:"limit"`
+		SkipColumns           []string `json:"skip_columns"`
+		Mode                  string   `json:"mode"`
+		HWMColumn             string   `json:"hwm_column"`
+		CheckpointEveryNPages int      `json:"checkpoint_every_n_pages"`
+	}{e.Table, e.Where, e.OrderBy, e.BatchSize, e.Limit, e.SkipColumns, e.Mode, e.HWMColumn, e.CheckpointEveryNPages}
 	b, _ := json.Marshal(canonical)
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:])

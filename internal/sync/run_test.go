@@ -4,7 +4,9 @@ package sync
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/neomantra/CivicSodaQuack/internal/config"
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
@@ -110,5 +112,116 @@ func TestRun_DryRun_NoWrites(t *testing.T) {
 	).Scan(&tables)
 	if tables != 0 {
 		t.Errorf("main schema has %d tables after dry-run, want 0", tables)
+	}
+}
+
+func TestRun_FullRefresh_PerID(t *testing.T) {
+	srv := newFakeSocrata(t,
+		mkDataset("aaaa-0001", 3, 0),
+		mkDataset("bbbb-0002", 3, 0),
+		mkDataset("cccc-0003", 3, 0))
+	cfg := baseCfg(fakeHost(srv))
+
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+	client := &socrata.Client{BatchSize: 5}
+
+	if _, err := Run(context.Background(), cfg, Deps{
+		DB: w, Client: client, Scheme: "http", Reporter: &RecordingReporter{},
+	}); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	state1, _ := w.ReadDatasetState("aaaa-0001")
+	state2, _ := w.ReadDatasetState("bbbb-0002")
+	state3, _ := w.ReadDatasetState("cccc-0003")
+	first1 := *state1.LastFullReplaceAt
+
+	time.Sleep(10 * time.Millisecond)
+
+	if _, err := Run(context.Background(), cfg, Deps{
+		DB: w, Client: client, Scheme: "http", Reporter: &RecordingReporter{},
+		FullRefreshIDs: []string{"aaaa-0001"},
+	}); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	state1b, _ := w.ReadDatasetState("aaaa-0001")
+	state2b, _ := w.ReadDatasetState("bbbb-0002")
+	state3b, _ := w.ReadDatasetState("cccc-0003")
+	if !state1b.LastFullReplaceAt.After(first1) {
+		t.Errorf("aaaa-0001 LastFullReplaceAt should advance; was=%v now=%v", first1, *state1b.LastFullReplaceAt)
+	}
+	if !state2b.LastFullReplaceAt.Equal(*state2.LastFullReplaceAt) {
+		t.Errorf("bbbb-0002 LastFullReplaceAt should be unchanged")
+	}
+	if !state3b.LastFullReplaceAt.Equal(*state3.LastFullReplaceAt) {
+		t.Errorf("cccc-0003 LastFullReplaceAt should be unchanged")
+	}
+}
+
+func TestRun_FullRefreshAll(t *testing.T) {
+	srv := newFakeSocrata(t,
+		mkDataset("aaaa-0001", 3, 0),
+		mkDataset("bbbb-0002", 3, 0))
+	cfg := baseCfg(fakeHost(srv))
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+	client := &socrata.Client{BatchSize: 5}
+
+	if _, err := Run(context.Background(), cfg, Deps{
+		DB: w, Client: client, Scheme: "http", Reporter: &RecordingReporter{},
+	}); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	state1, _ := w.ReadDatasetState("aaaa-0001")
+	state2, _ := w.ReadDatasetState("bbbb-0002")
+	first1, first2 := *state1.LastFullReplaceAt, *state2.LastFullReplaceAt
+
+	time.Sleep(10 * time.Millisecond)
+
+	if _, err := Run(context.Background(), cfg, Deps{
+		DB: w, Client: client, Scheme: "http", Reporter: &RecordingReporter{},
+		FullRefreshAll: true,
+	}); err != nil {
+		t.Fatalf("refresh-all: %v", err)
+	}
+
+	state1b, _ := w.ReadDatasetState("aaaa-0001")
+	state2b, _ := w.ReadDatasetState("bbbb-0002")
+	if !state1b.LastFullReplaceAt.After(first1) || !state2b.LastFullReplaceAt.After(first2) {
+		t.Errorf("both LastFullReplaceAt should advance under FullRefreshAll")
+	}
+}
+
+func TestRun_FullRefresh_UnknownID_Errors(t *testing.T) {
+	srv := newFakeSocrata(t, mkDataset("aaaa-0001", 1, 0))
+	cfg := baseCfg(fakeHost(srv))
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+	client := &socrata.Client{BatchSize: 5}
+
+	_, err := Run(context.Background(), cfg, Deps{
+		DB: w, Client: client, Scheme: "http", Reporter: &RecordingReporter{},
+		FullRefreshIDs: []string{"zzzz-9999"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "zzzz-9999") {
+		t.Errorf("want error mentioning zzzz-9999, got %v", err)
+	}
+}
+
+func TestRun_FullRefresh_AndAll_BothSet_Errors(t *testing.T) {
+	srv := newFakeSocrata(t, mkDataset("aaaa-0001", 1, 0))
+	cfg := baseCfg(fakeHost(srv))
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+	client := &socrata.Client{BatchSize: 5}
+
+	_, err := Run(context.Background(), cfg, Deps{
+		DB: w, Client: client, Scheme: "http", Reporter: &RecordingReporter{},
+		FullRefreshIDs: []string{"aaaa-0001"},
+		FullRefreshAll: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("want mutually-exclusive error, got %v", err)
 	}
 }

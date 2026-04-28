@@ -315,3 +315,123 @@ func containsAll(s string, subs ...string) bool {
 	}
 	return true
 }
+
+func TestIncremental_DeltaCheckpoints_PersistsMidStream(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	bootstrap := mkIncrDataset("aaaa-0001", 1, "2026-04-22")
+	if res := runIncr(t, bootstrap, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+
+	rows := []map[string]any{
+		{":id": "x-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(0)},
+		{":id": "x-1", ":updated_at": "2026-04-23T00:00:01.000", "score": float64(1)},
+		{":id": "x-2", ":updated_at": "2026-04-23T00:00:02.000", "score": float64(2)},
+		{":id": "x-3", ":updated_at": "2026-04-23T00:00:03.000", "score": float64(3)},
+		{":id": "x-4", ":updated_at": "2026-04-23T00:00:04.000", "score": float64(4)},
+	}
+	ds := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds", Columns: bootstrap.Columns,
+		Rows: rows, FailAtOffset: 4,
+	}
+
+	srv := newFakeSocrata(t, ds)
+	client := &socrata.Client{BatchSize: 1, MaxRetries: 1, RetryWait: time.Millisecond}
+	strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: "run2"}
+	target := DatasetTarget{ID: ds.ID,
+		Effective: config.Effective{
+			DatasetID: ds.ID, Table: "crimes", BatchSize: 1,
+			CheckpointEveryNPages: 2,
+		}}
+	res, _ := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+	if res.Status != "failed" {
+		t.Fatalf("status: got %q, want failed", res.Status)
+	}
+
+	// Pages 1..4 succeed (offsets 0..3). Checkpoint fires after pages 2 and 4.
+	// Persisted HWM should reflect page 4's row (T3).
+	state2, _ := w.ReadDatasetState("aaaa-0001")
+	if state2.HWMUpdatedAt == nil {
+		t.Fatal("HWM nil")
+	}
+	want := time.Date(2026, 4, 23, 0, 0, 3, 0, time.UTC)
+	if !state2.HWMUpdatedAt.Equal(want) {
+		t.Errorf("HWM: got %v, want %v (T3, after page 4 checkpoint)", state2.HWMUpdatedAt, want)
+	}
+}
+
+func TestIncremental_DeltaCheckpoints_DisabledByDefault(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+	bootstrap := mkIncrDataset("aaaa-0001", 1, "2026-04-22")
+	if res := runIncr(t, bootstrap, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+	state1, _ := w.ReadDatasetState("aaaa-0001")
+	priorHWM := *state1.HWMUpdatedAt
+
+	rows := []map[string]any{
+		{":id": "x-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(0)},
+		{":id": "x-1", ":updated_at": "2026-04-23T00:00:01.000", "score": float64(1)},
+		{":id": "x-2", ":updated_at": "2026-04-23T00:00:02.000", "score": float64(2)},
+		{":id": "x-3", ":updated_at": "2026-04-23T00:00:03.000", "score": float64(3)},
+	}
+	ds := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds", Columns: bootstrap.Columns,
+		Rows: rows, FailAtOffset: 4,
+	}
+	srv := newFakeSocrata(t, ds)
+	client := &socrata.Client{BatchSize: 1, MaxRetries: 1, RetryWait: time.Millisecond}
+	strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: "run2"}
+	target := DatasetTarget{ID: ds.ID,
+		Effective: config.Effective{
+			DatasetID: ds.ID, Table: "crimes", BatchSize: 1,
+		}}
+	res, _ := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+	if res.Status != "failed" {
+		t.Fatalf("status: got %q", res.Status)
+	}
+	state2, _ := w.ReadDatasetState("aaaa-0001")
+	if !state2.HWMUpdatedAt.Equal(priorHWM) {
+		t.Errorf("HWM advanced without checkpoint flag: was %v now %v", priorHWM, state2.HWMUpdatedAt)
+	}
+}
+
+func TestIncremental_DeltaCheckpoints_FinalWriteSubsumes(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+	bootstrap := mkIncrDataset("aaaa-0001", 1, "2026-04-22")
+	if res := runIncr(t, bootstrap, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+	rows := []map[string]any{
+		{":id": "x-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(0)},
+		{":id": "x-1", ":updated_at": "2026-04-23T00:00:01.000", "score": float64(1)},
+		{":id": "x-2", ":updated_at": "2026-04-23T00:00:02.000", "score": float64(2)},
+		{":id": "x-3", ":updated_at": "2026-04-23T00:00:03.000", "score": float64(3)},
+		{":id": "x-4", ":updated_at": "2026-04-23T00:00:04.000", "score": float64(4)},
+	}
+	ds := fakeDataset{
+		ID: "aaaa-0001", Name: "Ds", Columns: bootstrap.Columns,
+		Rows: rows,
+	}
+	srv := newFakeSocrata(t, ds)
+	client := &socrata.Client{BatchSize: 1}
+	strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: "run2"}
+	target := DatasetTarget{ID: ds.ID,
+		Effective: config.Effective{
+			DatasetID: ds.ID, Table: "crimes", BatchSize: 1,
+			CheckpointEveryNPages: 2,
+		}}
+	res, _ := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+	if res.Status != "ok" {
+		t.Fatalf("status: %v", res.Err)
+	}
+	state2, _ := w.ReadDatasetState("aaaa-0001")
+	want := time.Date(2026, 4, 23, 0, 0, 4, 0, time.UTC)
+	if !state2.HWMUpdatedAt.Equal(want) {
+		t.Errorf("HWM after success: got %v, want %v", state2.HWMUpdatedAt, want)
+	}
+}

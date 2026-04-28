@@ -40,6 +40,10 @@ type Override struct {
 	Columns   Columns `yaml:"columns"`
 	Mode      string  `yaml:"mode"`       // "" | "incremental" | "full_replace"
 	HWMColumn string  `yaml:"hwm_column"` // "" defaults to ":updated_at"
+	// CheckpointEveryNPages, when > 0, persists the running HWM to dataset_state
+	// every N delta pages (Phase 5). 0 = disabled (Phase 2 invariant: HWM only
+	// advances on clean dataset completion).
+	CheckpointEveryNPages int `yaml:"checkpoint_every_n_pages"`
 }
 
 // Columns carries column-level overrides.

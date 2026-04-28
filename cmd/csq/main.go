@@ -18,6 +18,7 @@ import (
 	flag "github.com/spf13/pflag"
 
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
+	"github.com/neomantra/CivicSodaQuack/internal/portallock"
 	"github.com/neomantra/CivicSodaQuack/internal/socrata"
 )
 
@@ -26,18 +27,22 @@ const usage = `csq — CivicSodaQuack
 Usage:
   csq extract  --portal <host> --dataset <4x4> [options]
   csq catalog  --portal <host> [--refresh] [--json] [--output FILE]
-  csq sync     --config <portal.yaml> [--dry-run] [--only IDs]
+  csq sync     --config <portal.yaml> [--dry-run] [--only IDs] [--full-refresh ID ...] [--full-refresh-all]
   csq mcp      --db <portal.duckdb> [--db ...] [--http <addr>]
   csq snapshot --db <portal.duckdb> --output <snap.tar.zst> [--portal NAME] [--force]
   csq fetch    --from <url> [--output <path.duckdb>] [--no-verify] [--force]
 
+All subcommands except 'fetch' acquire <dbpath>.lock (advisory flock).
+Pass --no-lock to bypass or --lock-wait <duration> to retry.
+
 Examples:
   csq extract  --portal data.cityofchicago.org --dataset 6zsd-86xi --limit 10000
   csq catalog  --portal data.cityofchicago.org --category "Public Safety"
-  csq sync     --config data.cityofchicago.org.yaml
+  csq sync     --config data.cityofchicago.org.yaml --full-refresh 6zsd-86xi
+  csq sync     --config data.cityofchicago.org.yaml --full-refresh-all --lock-wait 30s
   csq mcp      --db data.cityofchicago.org.duckdb
-  csq snapshot --db data.cityofchicago.org.duckdb --output chicago-2026-04-23.tar.zst
-  csq fetch    --from https://example.com/snapshots/chicago-2026-04-23.tar.zst
+  csq snapshot --db data.cityofchicago.org.duckdb --output chicago-2026-04-28.tar.zst
+  csq fetch    --from https://example.com/snapshots/chicago-2026-04-28.tar.zst
 `
 
 func main() {
@@ -98,6 +103,8 @@ func runExtract(args []string) error {
 		limit     int
 		replace   bool
 		verbose   bool
+		noLock    bool
+		lockWait  time.Duration
 	)
 	fs.StringVar(&portal, "portal", "", "Socrata portal host (e.g. data.cityofchicago.org)")
 	fs.StringVar(&dataset, "dataset", "", "Socrata dataset 4x4 id (e.g. 6zsd-86xi)")
@@ -110,6 +117,9 @@ func runExtract(args []string) error {
 	fs.IntVar(&limit, "limit", 0, "Max rows to fetch (0 = all)")
 	fs.BoolVar(&replace, "replace", true, "Drop and recreate the table before inserting")
 	fs.BoolVarP(&verbose, "verbose", "v", false, "Verbose progress output")
+	fs.BoolVar(&noLock, "no-lock", false, "Skip portal lock acquisition")
+	fs.DurationVar(&lockWait, "lock-wait", 0,
+		"Retry lock acquisition for up to this duration before giving up")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -125,6 +135,12 @@ func runExtract(args []string) error {
 	if table == "" {
 		table = strings.ReplaceAll(dataset, "-", "_")
 	}
+
+	lock, err := portallock.Acquire(dbPath, portallock.Options{NoLock: noLock, LockWait: lockWait})
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
 	client := &socrata.Client{
 		AppToken:  appToken,

@@ -63,6 +63,27 @@ Upload the tarball anywhere your agents can reach (S3, GitHub Releases, an inter
 
 `csq fetch` verifies the SHA-256 against the manifest before declaring success. Pass `--no-verify` to skip (not recommended).
 
+### Full-refresh and locking
+
+Force one or more datasets to re-bootstrap on the next sync without editing YAML:
+
+```bash
+./csq sync --config data.cityofchicago.org.yaml --full-refresh 6zsd-86xi
+./csq sync --config data.cityofchicago.org.yaml --full-refresh-all
+```
+
+All subcommands that open a per-portal DuckDB acquire `<dbpath>.lock` (advisory `flock`). If another `csq` process is holding the lock, the second errors with a message naming the lock file. Pass `--no-lock` to bypass or `--lock-wait 30s` to retry briefly. `csq fetch` does not lock (it writes a fresh file).
+
+For very long catch-up runs on large datasets, opt into mid-stream HWM persistence in YAML:
+
+```yaml
+overrides:
+  6zsd-86xi:
+    checkpoint_every_n_pages: 100   # 0 = disabled (Phase 2 default)
+```
+
+A failure on page 1500 of a 2000-page catch-up then resumes from the most recent checkpoint instead of from the original HWM.
+
 ### Config shape
 
 ```yaml
