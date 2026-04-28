@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	flag "github.com/spf13/pflag"
 
+	"github.com/neomantra/CivicSodaQuack/internal/portallock"
 	"github.com/neomantra/CivicSodaQuack/internal/snapshot"
 )
 
@@ -20,12 +22,17 @@ func runSnapshot(args []string) error {
 		portal      string
 		keepStaging bool
 		force       bool
+		noLock      bool
+		lockWait    time.Duration
 	)
 	fs.StringVar(&dbPath, "db", "", "Source DuckDB to package (required)")
 	fs.StringVar(&outputPath, "output", "", "Destination tarball (required, .tar.zst)")
 	fs.StringVar(&portal, "portal", "", "Portal name in manifest (default: derived from --db filename)")
 	fs.BoolVar(&keepStaging, "keep-staging", false, "Skip _csq_staging cleanup")
 	fs.BoolVar(&force, "force", false, "Overwrite --output if it exists")
+	fs.BoolVar(&noLock, "no-lock", false, "Skip portal lock acquisition")
+	fs.DurationVar(&lockWait, "lock-wait", 0,
+		"Retry lock acquisition for up to this duration before giving up")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -36,6 +43,12 @@ func runSnapshot(args []string) error {
 	if outputPath == "" {
 		return fmt.Errorf("--output is required")
 	}
+
+	lock, err := portallock.Acquire(dbPath, portallock.Options{NoLock: noLock, LockWait: lockWait})
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
 	m, err := snapshot.Pack(context.Background(), snapshot.ProducerOptions{
 		DBPath:      dbPath,

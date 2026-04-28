@@ -18,6 +18,7 @@ import (
 	flag "github.com/spf13/pflag"
 
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
+	"github.com/neomantra/CivicSodaQuack/internal/portallock"
 	"github.com/neomantra/CivicSodaQuack/internal/socrata"
 )
 
@@ -98,6 +99,8 @@ func runExtract(args []string) error {
 		limit     int
 		replace   bool
 		verbose   bool
+		noLock    bool
+		lockWait  time.Duration
 	)
 	fs.StringVar(&portal, "portal", "", "Socrata portal host (e.g. data.cityofchicago.org)")
 	fs.StringVar(&dataset, "dataset", "", "Socrata dataset 4x4 id (e.g. 6zsd-86xi)")
@@ -110,6 +113,9 @@ func runExtract(args []string) error {
 	fs.IntVar(&limit, "limit", 0, "Max rows to fetch (0 = all)")
 	fs.BoolVar(&replace, "replace", true, "Drop and recreate the table before inserting")
 	fs.BoolVarP(&verbose, "verbose", "v", false, "Verbose progress output")
+	fs.BoolVar(&noLock, "no-lock", false, "Skip portal lock acquisition")
+	fs.DurationVar(&lockWait, "lock-wait", 0,
+		"Retry lock acquisition for up to this duration before giving up")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -125,6 +131,12 @@ func runExtract(args []string) error {
 	if table == "" {
 		table = strings.ReplaceAll(dataset, "-", "_")
 	}
+
+	lock, err := portallock.Acquire(dbPath, portallock.Options{NoLock: noLock, LockWait: lockWait})
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
 	client := &socrata.Client{
 		AppToken:  appToken,
