@@ -137,21 +137,29 @@ func TestFetch_UnsupportedSchemaVersion(t *testing.T) {
 }
 
 func TestFetch_UnsafeFilename(t *testing.T) {
-	dir := t.TempDir()
-	bad := filepath.Join(dir, "bad.tar.zst")
-	{
-		f, _ := os.Create(bad)
-		w := newTarZstWriter(f)
-		body := []byte(`{"schema_version":1,"portal":"x","csq_version":"v","snapshot_id":"i","duckdb_filename":"../etc/passwd","duckdb_sha256":"00","duckdb_size_bytes":0}`)
-		_ = w.WriteEntry("manifest.json", int64(len(body)), timeFixed(), bytes.NewReader(body))
-		_ = w.Close()
-		f.Close()
+	cases := []string{
+		`../etc/passwd`,
+		`..`,
+		`.`,
+		`/etc/passwd`,
 	}
-	_, err := Fetch(context.Background(), ConsumerOptions{
-		URL: "file://" + bad, OutputPath: filepath.Join(dir, "out.duckdb"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsafe filename") {
-		t.Errorf("want unsafe-filename error, got %v", err)
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			bad := filepath.Join(dir, "bad.tar.zst")
+			f, _ := os.Create(bad)
+			w := newTarZstWriter(f)
+			body := []byte(`{"schema_version":1,"portal":"x","csq_version":"v","snapshot_id":"i","duckdb_filename":"` + name + `","duckdb_sha256":"00","duckdb_size_bytes":0}`)
+			_ = w.WriteEntry("manifest.json", int64(len(body)), timeFixed(), bytes.NewReader(body))
+			_ = w.Close()
+			f.Close()
+			_, err := Fetch(context.Background(), ConsumerOptions{
+				URL: "file://" + bad, OutputPath: filepath.Join(dir, "out.duckdb"),
+			})
+			if err == nil || !strings.Contains(err.Error(), "unsafe filename") {
+				t.Errorf("want unsafe-filename error, got %v", err)
+			}
+		})
 	}
 }
 

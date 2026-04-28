@@ -135,7 +135,7 @@ func schemeOf(url string) string {
 
 // isSafeFilename rejects empty, absolute, or path-traversing names.
 func isSafeFilename(name string) bool {
-	if name == "" {
+	if name == "" || name == "." || name == ".." {
 		return false
 	}
 	if filepath.Clean(name) != name {
