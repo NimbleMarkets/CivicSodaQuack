@@ -338,3 +338,80 @@ func TestCSQ_SyncSmoke(t *testing.T) {
 		t.Errorf("row count: got %d, want 8", n)
 	}
 }
+
+func TestCSQ_Snapshot_RoundTrip_Smoke(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "data.cityofchicago.org.duckdb")
+	tarPath := filepath.Join(dir, "snap.tar.zst")
+	restored := filepath.Join(dir, "restored.duckdb")
+
+	// Seed a minimal CSQ DuckDB.
+	{
+		db, err := sql.Open("duckdb", srcPath)
+		if err != nil {
+			t.Fatalf("seed open: %v", err)
+		}
+		stmts := []string{
+			`CREATE SCHEMA _csq`,
+			`CREATE TABLE _csq.catalog (
+				id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL,
+				description VARCHAR, category VARCHAR, tags JSON,
+				row_count BIGINT, updated_at TIMESTAMP,
+				fetched_at TIMESTAMP NOT NULL, raw JSON NOT NULL)`,
+			`INSERT INTO _csq.catalog (id, name, fetched_at, raw)
+			 VALUES ('aaaa-0001', 'Smoke A', NOW(), '{}')`,
+			`INSERT INTO _csq.catalog (id, name, fetched_at, raw)
+			 VALUES ('bbbb-0002', 'Smoke B', NOW(), '{}')`,
+			`CREATE TABLE _csq.sync_runs (
+				run_id VARCHAR NOT NULL, dataset_id VARCHAR NOT NULL,
+				table_name VARCHAR NOT NULL, started_at TIMESTAMP NOT NULL,
+				finished_at TIMESTAMP, status VARCHAR NOT NULL,
+				rows_written BIGINT, error VARCHAR, duration_ms BIGINT,
+				config_hash VARCHAR, PRIMARY KEY (run_id, dataset_id))`,
+			`INSERT INTO _csq.sync_runs (run_id, dataset_id, table_name, started_at, status, rows_written)
+			 VALUES ('run-1', 'aaaa-0001', 'aaaa_0001', NOW(), 'ok', 100)`,
+			`INSERT INTO _csq.sync_runs (run_id, dataset_id, table_name, started_at, status, rows_written)
+			 VALUES ('run-1', 'bbbb-0002', 'bbbb_0002', NOW(), 'ok', 50)`,
+		}
+		for _, s := range stmts {
+			if _, err := db.Exec(s); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+		}
+		db.Close()
+	}
+
+	// csq snapshot
+	cmd := exec.Command(os.Getenv("CSQ_BIN"), "snapshot", "--db", srcPath, "--output", tarPath)
+	var stderr1 bytes.Buffer
+	cmd.Stderr = &stderr1
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("csq snapshot: %v\nstderr:\n%s", err, stderr1.String())
+	}
+	if st, err := os.Stat(tarPath); err != nil || st.Size() < 1024 {
+		t.Fatalf("tarball missing or too small: stat err=%v size=%d", err, st.Size())
+	}
+
+	// csq fetch from file:// URL
+	cmd2 := exec.Command(os.Getenv("CSQ_BIN"), "fetch",
+		"--from", "file://"+tarPath, "--output", restored)
+	var stderr2 bytes.Buffer
+	cmd2.Stderr = &stderr2
+	if err := cmd2.Run(); err != nil {
+		t.Fatalf("csq fetch: %v\nstderr:\n%s", err, stderr2.String())
+	}
+
+	// Restored DuckDB should open and contain the seeded rows.
+	db, err := sql.Open("duckdb", restored)
+	if err != nil {
+		t.Fatalf("open restored: %v", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM _csq.catalog`).Scan(&n); err != nil {
+		t.Fatalf("query restored: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("restored catalog rows: got %d, want 2", n)
+	}
+}
