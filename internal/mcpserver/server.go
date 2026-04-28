@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/neomantra/CivicSodaQuack/internal/config"
+	"github.com/neomantra/CivicSodaQuack/internal/version"
 )
 
 // queryTimeout is the per-query timeout enforced by query_sql.
@@ -19,6 +22,10 @@ const queryTimeout = 30 * time.Second
 type Options struct {
 	DBs      []DBSpec // resolved (alias, path) pairs; required, non-empty
 	HTTPAddr string   // empty means stdio; non-empty switches to HTTP
+	// Configs maps portal alias → registered YAML config. Phase 6 write tools
+	// (sync_dataset, refresh_catalog) are only registered when len(Configs) > 0.
+	// Read tools register regardless.
+	Configs map[string]*config.Config
 }
 
 // Serve constructs the server, opens pools, registers all tools, and runs the
@@ -31,7 +38,7 @@ func Serve(ctx context.Context, opts Options) error {
 	}
 	defer pools.Close()
 
-	srv, err := buildServer(pools)
+	srv, err := buildServer(pools, opts.Configs)
 	if err != nil {
 		return err
 	}
@@ -48,12 +55,12 @@ type DatasetList struct {
 	Datasets []DatasetSummary `json:"datasets"`
 }
 
-// buildServer creates an *mcp.Server and registers all four tools with the
-// given pools captured in the handler closures.
-func buildServer(pools *Pools) (*mcp.Server, error) {
+// buildServer creates an *mcp.Server and registers all four read tools (and
+// the two write tools when configs is non-empty).
+func buildServer(pools *Pools, configs map[string]*config.Config) (*mcp.Server, error) {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "civicsodaquack",
-		Version: "0.3.0",
+		Version: version.Version,
 	}, nil)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -104,6 +111,30 @@ func buildServer(pools *Pools) (*mcp.Server, error) {
 			Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 		}, out, nil
 	})
+
+	// Phase 6: write tools register only when at least one portal has a config.
+	if len(configs) > 0 {
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "sync_dataset",
+			Description: "Sync one dataset by ID for a registered portal. Set full_refresh=true to bootstrap (full-replace) instead of delta. Blocks until the sync finishes.",
+		}, func(ctx context.Context, req *mcp.CallToolRequest, args SyncDatasetArgs) (*mcp.CallToolResult, SyncDatasetResult, error) {
+			out, err := syncDatasetHandler(ctx, configs, args)
+			if err != nil {
+				return nil, SyncDatasetResult{}, err
+			}
+			return &mcp.CallToolResult{}, out, nil
+		})
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "refresh_catalog",
+			Description: "Refetch /api/catalog/v1 for one or all registered portals and upsert _csq.catalog. Per-portal failures don't abort the batch.",
+		}, func(ctx context.Context, req *mcp.CallToolRequest, args RefreshCatalogArgs) (*mcp.CallToolResult, RefreshCatalogResultList, error) {
+			out, err := refreshCatalogHandler(ctx, configs, args)
+			if err != nil {
+				return nil, RefreshCatalogResultList{}, err
+			}
+			return &mcp.CallToolResult{}, out, nil
+		})
+	}
 
 	return srv, nil
 }

@@ -24,8 +24,14 @@ tasks:
   build:
     desc: 'Build the csq CLI'
     deps: [tidy]
+    vars:
+      GIT_VERSION:
+        sh: git describe --tags --always --dirty 2>/dev/null || echo 0.6.0-dev
     cmds:
-      - go build -o csq ./cmd/csq
+      - >
+        go build
+        -ldflags "-X github.com/neomantra/CivicSodaQuack/internal/version.Version={{.GIT_VERSION}}"
+        -o csq ./cmd/csq
     generates:
       - csq
     sources:

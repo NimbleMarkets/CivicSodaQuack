@@ -23,7 +23,7 @@ func TestServe_RegistersFourTools(t *testing.T) {
 	}
 	defer pools.Close()
 
-	srv, err := buildServer(pools)
+	srv, err := buildServer(pools, nil)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestServe_HTTPSmoke(t *testing.T) {
 	}
 	defer pools.Close()
 
-	srv, err := buildServer(pools)
+	srv, err := buildServer(pools, nil)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}

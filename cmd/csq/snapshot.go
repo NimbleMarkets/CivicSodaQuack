@@ -12,6 +12,7 @@ import (
 
 	"github.com/neomantra/CivicSodaQuack/internal/portallock"
 	"github.com/neomantra/CivicSodaQuack/internal/snapshot"
+	"github.com/neomantra/CivicSodaQuack/internal/version"
 )
 
 func runSnapshot(args []string) error {
@@ -56,7 +57,7 @@ func runSnapshot(args []string) error {
 		Portal:      portal,
 		KeepStaging: keepStaging,
 		Force:       force,
-		CSQVersion:  "0.4.0",
+		CSQVersion:  version.Version,
 	})
 	if err != nil {
 		return err

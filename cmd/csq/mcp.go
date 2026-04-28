@@ -19,12 +19,14 @@ import (
 func runMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	var (
-		dbs      []string
-		httpAddr string
-		noLock   bool
-		lockWait time.Duration
+		dbs         []string
+		configPaths []string
+		httpAddr    string
+		noLock      bool
+		lockWait    time.Duration
 	)
 	fs.StringArrayVar(&dbs, "db", nil, "Portal DuckDB to attach: 'path.duckdb' or 'alias=path.duckdb' (repeatable)")
+	fs.StringArrayVar(&configPaths, "config", nil, "Portal YAML config (repeatable; paired positionally with --db; enables write tools)")
 	fs.StringVar(&httpAddr, "http", "", "Listen on this address for HTTP/SSE transport (default: stdio)")
 	fs.BoolVar(&noLock, "no-lock", false, "Skip portal lock acquisition")
 	fs.DurationVar(&lockWait, "lock-wait", 0,
@@ -35,6 +37,11 @@ func runMCP(args []string) error {
 	}
 
 	specs, err := mcpserver.ResolveDBSpecs(dbs)
+	if err != nil {
+		return err
+	}
+
+	configs, err := mcpserver.LoadConfigs(specs, configPaths)
 	if err != nil {
 		return err
 	}
@@ -66,5 +73,6 @@ func runMCP(args []string) error {
 	return mcpserver.Serve(ctx, mcpserver.Options{
 		DBs:      specs,
 		HTTPAddr: httpAddr,
+		Configs:  configs,
 	})
 }
