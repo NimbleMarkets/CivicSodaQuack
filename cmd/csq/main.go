@@ -28,7 +28,7 @@ Usage:
   csq extract  --portal <host> --dataset <4x4> [options]
   csq catalog  --portal <host> [--refresh] [--json] [--output FILE]
   csq sync     --config <portal.yaml> [--dry-run] [--only IDs] [--full-refresh ID ...] [--full-refresh-all]
-  csq mcp      --db <portal.duckdb> [--db ...] [--http <addr>]
+  csq mcp      --db <portal.duckdb> [--db ...] [--config <yaml> ...] [--http <addr>]
   csq snapshot --db <portal.duckdb> --output <snap.tar.zst> [--portal NAME] [--force]
   csq fetch    --from <url> [--output <path.duckdb>] [--no-verify] [--force]
 
@@ -40,7 +40,7 @@ Examples:
   csq catalog  --portal data.cityofchicago.org --category "Public Safety"
   csq sync     --config data.cityofchicago.org.yaml --full-refresh 6zsd-86xi
   csq sync     --config data.cityofchicago.org.yaml --full-refresh-all --lock-wait 30s
-  csq mcp      --db data.cityofchicago.org.duckdb
+  csq mcp      --db data.cityofchicago.org.duckdb --config data.cityofchicago.org.yaml
   csq snapshot --db data.cityofchicago.org.duckdb --output chicago-2026-04-28.tar.zst
   csq fetch    --from https://example.com/snapshots/chicago-2026-04-28.tar.zst
 `

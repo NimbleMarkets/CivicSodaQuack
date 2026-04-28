@@ -40,7 +40,21 @@ Set `SOCRATA_APP_TOKEN` (referenced in the YAML as `${SOCRATA_APP_TOKEN}`) to li
 ./csq mcp --db data.cityofchicago.org.duckdb --http 127.0.0.1:8080
 ```
 
-The MCP server exposes four tools: `list_datasets`, `describe_dataset`, `search_datasets`, and `query_sql`. The `query_sql` tool runs read-only DuckDB SQL across every attached portal; cross-portal queries use `<alias>.<schema>.<table>`, e.g. `SELECT * FROM chicago._csq.catalog UNION ALL SELECT * FROM nyc._csq.catalog`. Results are capped at 1000 rows / 1MB / 30s.
+The MCP server exposes four read tools: `list_datasets`, `describe_dataset`, `search_datasets`, and `query_sql`. The `query_sql` tool runs read-only DuckDB SQL across every attached portal; cross-portal queries use `<alias>.<schema>.<table>`, e.g. `SELECT * FROM chicago._csq.catalog UNION ALL SELECT * FROM nyc._csq.catalog`. Results are capped at 1000 rows / 1MB / 30s.
+
+Pair `--db` with `--config` (positionally) to enable two write tools:
+
+```bash
+./csq mcp --db data.cityofchicago.org.duckdb \
+          --config data.cityofchicago.org.yaml
+```
+
+- `sync_dataset(portal, dataset_id, full_refresh?)` — runs the same `sync.Run` that `csq sync` uses, for one dataset. Blocks until done.
+- `refresh_catalog(portal?)` — refetches `/api/catalog/v1` and upserts `_csq.catalog`. Per-portal failures don't abort the batch.
+
+Without `--config` for a portal, only the read tools are exposed. The MCP server's portal lock (Phase 5) covers the write tools — a separate `csq sync` against the same DB will still see the lock.
+
+The build version (used in `Implementation.Version` and Phase 4 snapshot manifests) is injected at build time from `git describe --tags --always --dirty`. Plain `go build` falls back to the package default `0.6.0-dev`.
 
 ### Distribute via snapshot
 
