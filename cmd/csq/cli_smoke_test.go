@@ -555,3 +555,140 @@ include:
 		t.Errorf("after killing mcp, sync should not see lock error; got: %s", stderr2.String())
 	}
 }
+
+func TestCSQ_SnapshotIndex_Smoke(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "data.example.org.duckdb")
+	tar1 := filepath.Join(dir, "snap-1.tar.zst")
+	tar2 := filepath.Join(dir, "snap-2.tar.zst")
+	indexPath := filepath.Join(dir, "index.json")
+
+	// Seed a minimal CSQ DB.
+	{
+		db, _ := sql.Open("duckdb", srcPath)
+		_, _ = db.Exec(`CREATE SCHEMA _csq`)
+		_, _ = db.Exec(`CREATE TABLE _csq.catalog (
+			id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL,
+			description VARCHAR, category VARCHAR, tags JSON,
+			row_count BIGINT, updated_at TIMESTAMP,
+			fetched_at TIMESTAMP NOT NULL, raw JSON NOT NULL)`)
+		_, _ = db.Exec(`CREATE TABLE _csq.sync_runs (
+			run_id VARCHAR NOT NULL, dataset_id VARCHAR NOT NULL,
+			table_name VARCHAR NOT NULL, started_at TIMESTAMP NOT NULL,
+			finished_at TIMESTAMP, status VARCHAR NOT NULL,
+			rows_written BIGINT, error VARCHAR, duration_ms BIGINT,
+			config_hash VARCHAR, PRIMARY KEY (run_id, dataset_id))`)
+		_, _ = db.Exec(`CREATE TABLE _csq.dataset_state (
+			dataset_id VARCHAR PRIMARY KEY,
+			hwm_updated_at TIMESTAMP, last_full_replace_at TIMESTAMP,
+			last_run_id VARCHAR, hwm_column VARCHAR NOT NULL)`)
+		_, _ = db.Exec(`INSERT INTO _csq.catalog (id, name, fetched_at, raw)
+		                VALUES ('aaaa-0001', 'Smoke', NOW(), '{}')`)
+		db.Close()
+	}
+
+	// Pack two snapshots (different ULIDs by virtue of timing).
+	for i, tarPath := range []string{tar1, tar2} {
+		cmd := exec.Command(os.Getenv("CSQ_BIN"), "snapshot",
+			"--db", srcPath, "--output", tarPath)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("snapshot %d: %v\nstderr:\n%s", i, err, stderr.String())
+		}
+		time.Sleep(2 * time.Millisecond) // ensure ULIDs differ
+	}
+
+	// Add both to the index.
+	for _, tarPath := range []string{tar1, tar2} {
+		cmd := exec.Command(os.Getenv("CSQ_BIN"), "snapshot-index", "update",
+			"--index", indexPath,
+			"--add", tarPath,
+			"--url", "https://example.com/"+filepath.Base(tarPath))
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("index update: %v\nstderr:\n%s", err, stderr.String())
+		}
+	}
+
+	// Validate the index.
+	val := exec.Command(os.Getenv("CSQ_BIN"), "snapshot-index", "validate",
+		"--index", indexPath)
+	var valErr bytes.Buffer
+	val.Stderr = &valErr
+	if err := val.Run(); err != nil {
+		t.Fatalf("validate: %v\nstderr:\n%s", err, valErr.String())
+	}
+
+	// Confirm the index has 2 entries newest-first.
+	body, _ := os.ReadFile(indexPath)
+	if !strings.Contains(string(body), "snap-1.tar.zst") || !strings.Contains(string(body), "snap-2.tar.zst") {
+		t.Errorf("index missing entries:\n%s", body)
+	}
+}
+
+func TestCSQ_Fetch_ViaIndex_Smoke(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "data.example.org.duckdb")
+	tarPath := filepath.Join(dir, "snap.tar.zst")
+	indexPath := filepath.Join(dir, "index.json")
+	restored := filepath.Join(dir, "restored.duckdb")
+
+	// Seed and pack.
+	{
+		db, _ := sql.Open("duckdb", srcPath)
+		_, _ = db.Exec(`CREATE SCHEMA _csq`)
+		_, _ = db.Exec(`CREATE TABLE _csq.catalog (
+			id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL,
+			description VARCHAR, category VARCHAR, tags JSON,
+			row_count BIGINT, updated_at TIMESTAMP,
+			fetched_at TIMESTAMP NOT NULL, raw JSON NOT NULL)`)
+		_, _ = db.Exec(`CREATE TABLE _csq.sync_runs (
+			run_id VARCHAR NOT NULL, dataset_id VARCHAR NOT NULL,
+			table_name VARCHAR NOT NULL, started_at TIMESTAMP NOT NULL,
+			finished_at TIMESTAMP, status VARCHAR NOT NULL,
+			rows_written BIGINT, error VARCHAR, duration_ms BIGINT,
+			config_hash VARCHAR, PRIMARY KEY (run_id, dataset_id))`)
+		_, _ = db.Exec(`CREATE TABLE _csq.dataset_state (
+			dataset_id VARCHAR PRIMARY KEY,
+			hwm_updated_at TIMESTAMP, last_full_replace_at TIMESTAMP,
+			last_run_id VARCHAR, hwm_column VARCHAR NOT NULL)`)
+		_, _ = db.Exec(`INSERT INTO _csq.catalog (id, name, fetched_at, raw)
+		                VALUES ('aaaa-0001', 'Smoke', NOW(), '{}')`)
+		db.Close()
+	}
+	if err := exec.Command(os.Getenv("CSQ_BIN"), "snapshot",
+		"--db", srcPath, "--output", tarPath).Run(); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	// Build the index pointing at the local file:// URL.
+	if err := exec.Command(os.Getenv("CSQ_BIN"), "snapshot-index", "update",
+		"--index", indexPath,
+		"--add", tarPath,
+		"--url", "file://"+tarPath).Run(); err != nil {
+		t.Fatalf("index update: %v", err)
+	}
+
+	// Fetch via index.
+	cmd := exec.Command(os.Getenv("CSQ_BIN"), "fetch",
+		"--index", "file://"+indexPath,
+		"--output", restored)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("fetch via index: %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	db, err := sql.Open("duckdb", restored)
+	if err != nil {
+		t.Fatalf("open restored: %v", err)
+	}
+	defer db.Close()
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM _csq.catalog`).Scan(&n)
+	if n != 1 {
+		t.Errorf("restored catalog rows: got %d, want 1", n)
+	}
+}
