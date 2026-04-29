@@ -77,6 +77,27 @@ Upload the tarball anywhere your agents can reach (S3, GitHub Releases, an inter
 
 `csq fetch` verifies the SHA-256 against the manifest before declaring success. Pass `--no-verify` to skip (not recommended).
 
+A publisher who maintains a per-portal `index.json` lets consumers fetch the latest snapshot without knowing the ID:
+
+```bash
+# Latest in the index
+./csq fetch --index https://snapshots.example.com/chicago/index.json
+# Pinned by snapshot_id
+./csq fetch --index https://snapshots.example.com/chicago/index.json --snapshot 01HZ...
+```
+
+The publisher updates the index after each snapshot:
+
+```bash
+./csq snapshot-index update \
+  --index snapshots/chicago/index.json \
+  --add chicago-2026-04-28.tar.zst \
+  --url https://snapshots.example.com/chicago/chicago-2026-04-28.tar.zst \
+  --max-keep 30
+```
+
+A reusable GitHub Actions workflow (`.github/workflows/snapshot.yml`) is provided for downstream repos to run nightly. See [docs/snapshot-publishing.md](./docs/snapshot-publishing.md).
+
 ### Full-refresh and locking
 
 Force one or more datasets to re-bootstrap on the next sync without editing YAML:
