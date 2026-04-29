@@ -45,12 +45,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
+        uses: actions/setup-go@v6
 
       - name: Install csq
         run: go install github.com/neomantra/CivicSodaQuack/cmd/csq@latest

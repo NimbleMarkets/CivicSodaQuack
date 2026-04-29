@@ -1,5 +1,8 @@
 name: ci
 
+env:
+  GOLANGCI_LINT_VERSION: v2.1
+
 on:
   push:
     branches: [main]
@@ -9,11 +12,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
+      - uses: actions/setup-go@v6
 
       - name: gofmt
         run: |
@@ -33,12 +34,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
+      - uses: actions/setup-go@v6
 
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.10.1
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
