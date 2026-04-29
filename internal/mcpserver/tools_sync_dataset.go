@@ -41,7 +41,7 @@ func syncDatasetHandler(ctx context.Context, configs map[string]*config.Config,
 	cfg, ok := configs[args.Portal]
 	if !ok {
 		return SyncDatasetResult{}, fmt.Errorf(
-			"sync_dataset: no config registered for portal %q; restart csq mcp with --db ... --config ...",
+			"sync_dataset: no config registered for portal %q; restart csq mcp with --db ... --config",
 			args.Portal)
 	}
 

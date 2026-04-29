@@ -63,9 +63,7 @@ func newFakeSocrata(t *testing.T, datasets ...fakeDataset) *httptest.Server {
 			return
 		}
 		cols := make([]map[string]string, 0, len(d.Columns))
-		for _, c := range d.Columns {
-			cols = append(cols, c)
-		}
+		cols = append(cols, d.Columns...)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": d.ID, "name": d.Name, "columns": cols,
 		})

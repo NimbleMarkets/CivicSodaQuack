@@ -16,10 +16,10 @@ import (
 // A single Socrata point/location column expands to two targets (lon, lat) plus
 // an optional raw column preserving the original GeoJSON.
 type TargetColumn struct {
-	Name     string            // DuckDB column name (unquoted)
-	Type     socrata.DuckDBType
-	Source   socrata.Column    // the Socrata column this derives from
-	Extract  func(row socrata.Row) (any, error)
+	Name    string // DuckDB column name (unquoted)
+	Type    socrata.DuckDBType
+	Source  socrata.Column // the Socrata column this derives from
+	Extract func(row socrata.Row) (any, error)
 }
 
 // TableSchema is the set of TargetColumns for a dataset plus the target table name.

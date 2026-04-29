@@ -13,7 +13,7 @@ func TestQuerySQL_HappySelect(t *testing.T) {
 	pools, cleanup := openFixturePools(t,
 		FixtureDataset{
 			ID: "aaaa-0001", Name: "Crimes",
-			TableName: "crimes",
+			TableName:  "crimes",
 			ColumnDefs: []string{"socrata_id VARCHAR", "score DOUBLE"},
 			Rows: []map[string]any{
 				{"socrata_id": "a", "score": 1.0},

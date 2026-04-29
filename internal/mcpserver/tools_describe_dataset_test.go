@@ -15,7 +15,7 @@ func TestDescribeDataset_Found(t *testing.T) {
 		FixtureDataset{
 			ID: "aaaa-0001", Name: "Crimes", Description: "Chicago crimes",
 			Category: "Public Safety", Tags: []string{"crime", "311"},
-			TableName: "aaaa_0001",
+			TableName:  "aaaa_0001",
 			ColumnDefs: []string{"socrata_id VARCHAR", "score DOUBLE", "kind VARCHAR"},
 			Rows:       []map[string]any{{"socrata_id": "a", "score": 1.0, "kind": "x"}},
 			Synced:     true, HWM: hwm,

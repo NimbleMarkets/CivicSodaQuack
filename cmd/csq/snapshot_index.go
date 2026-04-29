@@ -169,4 +169,3 @@ func writeIndexAtomic(path string, idx *snapshot.Index) error {
 	}
 	return nil
 }
-

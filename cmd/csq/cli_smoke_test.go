@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,6 +87,9 @@ func startFakePortal(t *testing.T) *httptest.Server {
 
 func TestCSQ_IncrementalSmoke(t *testing.T) {
 	// Mutable row store: the handler reads from this per request.
+	// Guarded by mu — httptest server goroutines can outlive cmd.Run() while
+	// finishing connection cleanup, racing with the mid-test append below.
+	var mu sync.Mutex
 	rows := []map[string]any{
 		{":id": "smoke-0", ":updated_at": "2026-04-22T00:00:00.000", "id": "smoke-0", "score": float64(0)},
 		{":id": "smoke-1", ":updated_at": "2026-04-22T00:00:01.000", "id": "smoke-1", "score": float64(1)},
@@ -115,6 +119,7 @@ func TestCSQ_IncrementalSmoke(t *testing.T) {
 		limit, _ := strconv.Atoi(q.Get("$limit"))
 		whereClause := q.Get("$where")
 
+		mu.Lock()
 		filtered := rows
 		if whereClause != "" {
 			// Only one predicate shape supported: ":updated_at > 'TS'"
@@ -133,7 +138,9 @@ func TestCSQ_IncrementalSmoke(t *testing.T) {
 		if offset > len(filtered) {
 			offset = len(filtered)
 		}
-		_ = json.NewEncoder(w).Encode(filtered[offset:end])
+		page := append([]map[string]any(nil), filtered[offset:end]...)
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(page)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -174,10 +181,12 @@ func TestCSQ_IncrementalSmoke(t *testing.T) {
 	db.Close()
 
 	// Add rows server-side, then run again.
+	mu.Lock()
 	rows = append(rows,
 		map[string]any{":id": "smoke-2", ":updated_at": "2026-04-23T00:00:00.000", "id": "smoke-2", "score": float64(2)},
 		map[string]any{":id": "smoke-3", ":updated_at": "2026-04-23T00:00:01.000", "id": "smoke-3", "score": float64(3)},
 	)
+	mu.Unlock()
 
 	cmd2 := exec.Command(os.Getenv("CSQ_BIN"), "sync", "--config", cfgPath)
 	cmd2.Env = append(os.Environ(), "CSQ_SCHEME=http")

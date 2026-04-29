@@ -38,7 +38,7 @@ func TestListDatasets_OnePortal(t *testing.T) {
 	pools, cleanup := openFixturePools(t,
 		FixtureDataset{
 			ID: "aaaa-0001", Name: "Crimes", Category: "Public Safety",
-			TableName: "aaaa_0001",
+			TableName:  "aaaa_0001",
 			ColumnDefs: []string{"socrata_id VARCHAR", "score DOUBLE"},
 			Rows:       []map[string]any{{"socrata_id": "a", "score": 1.0}, {"socrata_id": "b", "score": 2.0}},
 			Synced:     true, HWM: hwm,
