@@ -30,7 +30,9 @@ Usage:
   csq sync     --config <portal.yaml> [--dry-run] [--only IDs] [--full-refresh ID ...] [--full-refresh-all]
   csq mcp      --db <portal.duckdb> [--db ...] [--config <yaml> ...] [--http <addr>]
   csq snapshot --db <portal.duckdb> --output <snap.tar.zst> [--portal NAME] [--force]
-  csq fetch    --from <url> [--output <path.duckdb>] [--no-verify] [--force]
+  csq fetch    (--from <url> | --index <url> [--snapshot <id>]) [--output <path>] [--no-verify] [--force]
+  csq snapshot-index update --index <path> --add <tarball> --url <url> [--max-keep N]
+  csq snapshot-index validate --index <path>
 
 All subcommands except 'fetch' acquire <dbpath>.lock (advisory flock).
 Pass --no-lock to bypass or --lock-wait <duration> to retry.
@@ -79,6 +81,11 @@ func main() {
 	case "fetch":
 		if err := runFetch(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "csq fetch: %v\n", err)
+			os.Exit(1)
+		}
+	case "snapshot-index":
+		if err := runSnapshotIndex(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq snapshot-index: %v\n", err)
 			os.Exit(1)
 		}
 	case "-h", "--help", "help":

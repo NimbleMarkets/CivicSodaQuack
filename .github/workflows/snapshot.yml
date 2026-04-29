@@ -1,0 +1,108 @@
+name: csq snapshot
+# Reusable workflow that downstream repos invoke on a schedule (or manually) to
+# sync, snapshot, update an index, and publish to GitHub Releases or S3.
+# See docs/snapshot-publishing.md for caller examples.
+
+on:
+  workflow_call:
+    inputs:
+      portal-yaml-path:
+        description: "Path to the portal YAML config in the caller's checkout"
+        required: true
+        type: string
+      output-tarball-name:
+        description: "Tarball filename pattern (supports {portal} and {date})"
+        required: false
+        default: "{portal}-{date}.tar.zst"
+        type: string
+      release-target:
+        description: "Where to publish: github-release | s3"
+        required: true
+        type: string
+      s3-bucket:
+        description: "S3 bucket (when release-target=s3)"
+        required: false
+        type: string
+      index-url-base:
+        description: "Public URL prefix combined with the tarball filename for the index entry"
+        required: true
+        type: string
+      index-path:
+        description: "Local path to the index.json (committed to caller repo or fetched from S3)"
+        required: false
+        default: "snapshots/index.json"
+        type: string
+    secrets:
+      socrata-app-token:
+        required: false
+      aws-access-key-id:
+        required: false
+      aws-secret-access-key:
+        required: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install csq
+        run: go install github.com/neomantra/CivicSodaQuack/cmd/csq@latest
+
+      - name: Resolve portal name and tarball filename
+        id: meta
+        run: |
+          portal=$(yq '.portal' "${{ inputs.portal-yaml-path }}")
+          date=$(date -u +%Y-%m-%d)
+          filename=$(echo "${{ inputs.output-tarball-name }}" \
+                      | sed "s/{portal}/${portal}/g; s/{date}/${date}/g")
+          echo "portal=$portal"     >> "$GITHUB_OUTPUT"
+          echo "filename=$filename" >> "$GITHUB_OUTPUT"
+
+      - name: Sync portal
+        env:
+          SOCRATA_APP_TOKEN: ${{ secrets.socrata-app-token }}
+        run: |
+          csq sync --config "${{ inputs.portal-yaml-path }}"
+
+      - name: Snapshot
+        run: |
+          db_path=$(yq '.db' "${{ inputs.portal-yaml-path }}")
+          csq snapshot \
+            --db "$db_path" \
+            --output "${{ steps.meta.outputs.filename }}"
+
+      - name: Update index
+        run: |
+          csq snapshot-index update \
+            --index "${{ inputs.index-path }}" \
+            --add "${{ steps.meta.outputs.filename }}" \
+            --url "${{ inputs.index-url-base }}/${{ steps.meta.outputs.filename }}" \
+            --max-keep 30
+
+      - name: Publish (GitHub Release)
+        if: inputs.release-target == 'github-release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="snapshot-$(date -u +%Y-%m-%d)"
+          gh release create "$tag" \
+            "${{ steps.meta.outputs.filename }}" \
+            --title "$tag" --notes "Automated snapshot from csq"
+
+      - name: Publish (S3)
+        if: inputs.release-target == 's3'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.aws-secret-access-key }}
+        run: |
+          aws s3 cp "${{ steps.meta.outputs.filename }}" \
+            "s3://${{ inputs.s3-bucket }}/${{ steps.meta.outputs.filename }}"
+          aws s3 cp "${{ inputs.index-path }}" \
+            "s3://${{ inputs.s3-bucket }}/$(basename '${{ inputs.index-path }}')"

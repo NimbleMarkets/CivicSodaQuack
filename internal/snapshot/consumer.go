@@ -90,6 +90,12 @@ func Fetch(ctx context.Context, opts ConsumerOptions) (*Manifest, error) {
 	return manifest, nil
 }
 
+// OpenURL returns a ReadCloser for url, supporting http(s):// and file://.
+// Other schemes return an error. Caller must Close the result.
+func OpenURL(ctx context.Context, url string) (io.ReadCloser, error) {
+	return openURL(ctx, url)
+}
+
 // openURL returns a ReadCloser for opts.URL. http(s) and file are supported.
 func openURL(ctx context.Context, url string) (io.ReadCloser, error) {
 	switch {
