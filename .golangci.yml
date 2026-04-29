@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  default: standard
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # Idiomatic deferred cleanup — Close/Release/Rollback errors are not
+      # actionable on the cleanup path. Real failures surface elsewhere.
+      - linters: [errcheck]
+        text: "Error return value of `[A-Za-z0-9_.]+\\.(Close|Release|Rollback|WriteString)` is not checked"
+      # Best-effort env/temp cleanup in tests and snapshot producers.
+      - linters: [errcheck]
+        text: "Error return value of `os\\.(Remove|Setenv|Unsetenv)` is not checked"
