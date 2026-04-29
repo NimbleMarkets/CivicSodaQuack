@@ -5,6 +5,7 @@ package snapshot
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -39,4 +40,29 @@ func ParseManifest(b []byte) (*Manifest, error) {
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
 	return &m, nil
+}
+
+// ReadManifest reads a snapshot tarball from r and returns the parsed manifest
+// (the first entry). Useful for inspection without unpacking the DuckDB.
+//
+// Skips closing the tar/zstd readers — zstd's reader-ahead goroutine can block
+// in some scenarios when not drained, and the caller is expected to close the
+// underlying r (typically an *os.File) when done.
+func ReadManifest(r io.Reader) (*Manifest, error) {
+	tr, err := newTarZstReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("read tarball: %w", err)
+	}
+	hdr, body, err := tr.Next()
+	if err != nil {
+		return nil, fmt.Errorf("read first entry: %w", err)
+	}
+	if hdr.Name != "manifest.json" {
+		return nil, fmt.Errorf("first entry is %q, want manifest.json", hdr.Name)
+	}
+	mb, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("read manifest bytes: %w", err)
+	}
+	return ParseManifest(mb)
 }
