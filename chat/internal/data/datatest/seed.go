@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Neomantra Corp
 
-package data
+// Package datatest seeds csq-shaped databases for tests in other packages.
+package datatest
 
 import (
 	"database/sql"
@@ -13,9 +14,13 @@ import (
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
 )
 
-// seedDB writes a csq-shaped database with one catalogued, synced dataset
-// holding a few rows, and returns its path.
-func seedDB(t *testing.T) string {
+// SeedDB writes a csq database with one catalogued, synced dataset
+// "aaaa-0001" whose table main.crimes holds two rows, and returns its path.
+//
+//	socrata_id  ward  amount  seen                 note
+//	a           1     1.5     2026-01-02 00:00:00  NULL
+//	b           2     2       2026-01-02 13:45:00  x
+func SeedDB(t testing.TB) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.duckdb")
 	db, err := sql.Open("duckdb", path)

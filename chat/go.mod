@@ -12,6 +12,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
 	github.com/neomantra/CivicSodaQuack v0.0.0-00010101000000-000000000000
+	github.com/spf13/pflag v1.0.10
 )
 
 require (

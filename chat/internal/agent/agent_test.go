@@ -10,14 +10,36 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/neomantra/CivicSodaQuack/chat/internal/agent/agenttest"
+	"github.com/neomantra/CivicSodaQuack/chat/internal/data"
+	"github.com/neomantra/CivicSodaQuack/chat/internal/data/datatest"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/present"
 )
 
+func seedStore(t *testing.T) data.Store {
+	t.Helper()
+	st, err := data.Open([]string{"test=" + datatest.SeedDB(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+func toolResultText(t *testing.T, call fantasy.Call, id string) string {
+	t.Helper()
+	s := agenttest.ToolResultText(call, id)
+	if s == "" {
+		t.Fatalf("no tool result for %s in prompt", id)
+	}
+	return s
+}
+
 func TestAsk_PresentTablePushesRowsAndTellsModelOnlyTheShape(t *testing.T) {
-	model := &fakeModel{script: []fantasy.Response{
-		toolCallResponse("c1", "present_table", `{"sql":"SELECT socrata_id, ward FROM test.main.crimes ORDER BY socrata_id","title":"Crimes by ward"}`),
-		textResponse("Two records, one per ward."),
-	}}
+	model := agenttest.NewFakeModel(
+		agenttest.ToolCall("c1", "present_table", `{"sql":"SELECT socrata_id, ward FROM test.main.crimes ORDER BY socrata_id","title":"Crimes by ward"}`),
+		agenttest.Text("Two records, one per ward."),
+	)
 	r := New(model, seedStore(t), Options{})
 
 	var shown []present.Presentation
@@ -40,7 +62,7 @@ func TestAsk_PresentTablePushesRowsAndTellsModelOnlyTheShape(t *testing.T) {
 	}
 
 	// The model's second call saw a summary, not the rows.
-	told := toolResultText(t, model.calls[1], "c1")
+	told := toolResultText(t, model.Calls[1], "c1")
 	if !strings.Contains(told, `"Crimes by ward"`) || !strings.Contains(told, "2 row(s)") {
 		t.Errorf("model was told: %q", told)
 	}
@@ -69,10 +91,10 @@ func TestAsk_PresentTablePushesRowsAndTellsModelOnlyTheShape(t *testing.T) {
 }
 
 func TestAsk_ToolErrorReachesModelNotCaller(t *testing.T) {
-	model := &fakeModel{script: []fantasy.Response{
-		toolCallResponse("c1", "query_sql", `{"sql":"SELECT nope FROM test.main.crimes"}`),
-		textResponse("That column does not exist."),
-	}}
+	model := agenttest.NewFakeModel(
+		agenttest.ToolCall("c1", "query_sql", `{"sql":"SELECT nope FROM test.main.crimes"}`),
+		agenttest.Text("That column does not exist."),
+	)
 	r := New(model, seedStore(t), Options{})
 	resp, err := r.Ask(context.Background(), "count nope", nil, nil)
 	if err != nil {
@@ -81,31 +103,31 @@ func TestAsk_ToolErrorReachesModelNotCaller(t *testing.T) {
 	if resp.Text != "That column does not exist." {
 		t.Errorf("text = %q", resp.Text)
 	}
-	told := toolResultText(t, model.calls[1], "c1")
+	told := toolResultText(t, model.Calls[1], "c1")
 	if !strings.Contains(strings.ToLower(told), "nope") {
 		t.Errorf("model should see the SQL error, got %q", told)
 	}
 }
 
 func TestAsk_QuerySQLReturnsCSV(t *testing.T) {
-	model := &fakeModel{script: []fantasy.Response{
-		toolCallResponse("c1", "query_sql", `{"sql":"SELECT count(*) AS n FROM test.main.crimes"}`),
-		textResponse("There are 2."),
-	}}
+	model := agenttest.NewFakeModel(
+		agenttest.ToolCall("c1", "query_sql", `{"sql":"SELECT count(*) AS n FROM test.main.crimes"}`),
+		agenttest.Text("There are 2."),
+	)
 	r := New(model, seedStore(t), Options{})
 	if _, err := r.Ask(context.Background(), "how many", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if told := toolResultText(t, model.calls[1], "c1"); told != "n\n2" {
+	if told := toolResultText(t, model.Calls[1], "c1"); told != "n\n2" {
 		t.Errorf("csv = %q", told)
 	}
 }
 
 func TestAsk_HeadlessPresentTellsModelNothingWasShown(t *testing.T) {
-	model := &fakeModel{script: []fantasy.Response{
-		toolCallResponse("c1", "present_table", `{"sql":"SELECT ward FROM test.main.crimes","title":"Wards"}`),
-		textResponse(""),
-	}}
+	model := agenttest.NewFakeModel(
+		agenttest.ToolCall("c1", "present_table", `{"sql":"SELECT ward FROM test.main.crimes","title":"Wards"}`),
+		agenttest.Text(""),
+	)
 	r := New(model, seedStore(t), Options{})
 	resp, err := r.Ask(context.Background(), "wards", nil, nil)
 	if err != nil {
@@ -115,7 +137,7 @@ func TestAsk_HeadlessPresentTellsModelNothingWasShown(t *testing.T) {
 	if resp.Presented != 0 {
 		t.Errorf("presented = %d", resp.Presented)
 	}
-	if told := toolResultText(t, model.calls[1], "c1"); !strings.Contains(told, "No screen") {
+	if told := toolResultText(t, model.Calls[1], "c1"); !strings.Contains(told, "No screen") {
 		t.Errorf("model was told: %q", told)
 	}
 	if resp.Text != "(the model returned no text)" {
@@ -124,16 +146,16 @@ func TestAsk_HeadlessPresentTellsModelNothingWasShown(t *testing.T) {
 }
 
 func TestAsk_DescribeThenHistoryIsBounded(t *testing.T) {
-	model := &fakeModel{script: []fantasy.Response{
-		toolCallResponse("c1", "describe_dataset", `{"dataset_id":"aaaa-0001"}`),
-		textResponse("It has three columns."),
-		textResponse("Second turn."),
-	}}
+	model := agenttest.NewFakeModel(
+		agenttest.ToolCall("c1", "describe_dataset", `{"dataset_id":"aaaa-0001"}`),
+		agenttest.Text("It has three columns."),
+		agenttest.Text("Second turn."),
+	)
 	r := New(model, seedStore(t), Options{MaxHistory: 2})
 	if _, err := r.Ask(context.Background(), "describe it", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	told := toolResultText(t, model.calls[1], "c1")
+	told := toolResultText(t, model.Calls[1], "c1")
 	if !strings.Contains(told, `"table_name":"crimes"`) || !strings.Contains(told, `"ward"`) {
 		t.Errorf("describe result = %q", told)
 	}
@@ -162,7 +184,7 @@ func TestParseModel(t *testing.T) {
 }
 
 func TestSystemPrompt_NamesPortals(t *testing.T) {
-	r := New(&fakeModel{}, seedStore(t), Options{})
+	r := New(agenttest.NewFakeModel(), seedStore(t), Options{})
 	_ = r
 	got := systemPrompt([]string{"chicago", "nyc"}, testDate())
 	if !strings.Contains(got, "Attached portals: chicago, nyc") || !strings.Contains(got, "Today is 2026-09-30") {
@@ -184,10 +206,10 @@ func TestTruncateToolOutput(t *testing.T) {
 func testDate() time.Time { return time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC) }
 
 func TestAsk_EmptyReplyAfterTablePointsAtIt(t *testing.T) {
-	model := &fakeModel{script: []fantasy.Response{
-		toolCallResponse("c1", "present_table", `{"sql":"SELECT ward FROM test.main.crimes","title":"Wards"}`),
-		textResponse(""),
-	}}
+	model := agenttest.NewFakeModel(
+		agenttest.ToolCall("c1", "present_table", `{"sql":"SELECT ward FROM test.main.crimes","title":"Wards"}`),
+		agenttest.Text(""),
+	)
 	r := New(model, seedStore(t), Options{})
 	resp, err := r.Ask(context.Background(), "wards", nil, func(present.Presentation) {})
 	if err != nil {

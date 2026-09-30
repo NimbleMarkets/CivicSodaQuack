@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/neomantra/CivicSodaQuack/chat/internal/data/datatest"
 )
 
 func TestStore_DescribeAndQueryTable(t *testing.T) {
-	st, err := Open([]string{"test=" + seedDB(t)})
+	st, err := Open([]string{"test=" + datatest.SeedDB(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,7 @@ func TestStore_DescribeAndQueryTable(t *testing.T) {
 }
 
 func TestStore_SearchFindsByName(t *testing.T) {
-	st, err := Open([]string{seedDB(t)})
+	st, err := Open([]string{datatest.SeedDB(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
