@@ -14,12 +14,14 @@ tasks:
   tidy:
     desc: 'Tidy go modules'
     run: once
-    cmds:
-      - go mod tidy
     sources:
       - "**/*.go"
       - go.mod
       - go.sum
+      - chat/go.mod
+    cmds:
+      - go mod tidy
+      - go -C chat mod tidy
 
   build:
     desc: 'Build the csq CLI'
@@ -43,15 +45,29 @@ tasks:
     desc: 'Run go vet'
     cmds:
       - go vet ./...
+      - go -C chat vet ./...
 
   test:
     desc: 'Run tests'
     deps: [vet]
     cmds:
       - go test ./...
+      - go -C chat test ./...
+
+  build-chat:
+    desc: 'Build the csq-chat binary (nested module in chat/)'
+    cmds:
+      - go -C chat build -o ../bin/csq-chat ./cmd/csq-chat
+    generates:
+      - bin/csq-chat
+    sources:
+      - "chat/**/*.go"
+      - chat/go.mod
+      - chat/go.sum
+      - "internal/**/*.go"
 
   clean:
     desc: 'Remove built artifacts'
     cmds:
       - rm -f csq
-      - rm -rf dist
+      - rm -rf bin dist

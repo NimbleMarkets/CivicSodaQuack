@@ -87,3 +87,23 @@ You can copy-paste this directly. Want me to adjust it for:
 - Or include more patterns from `dbn-go-mcp-data` (e.g., cache structure, tool registration style)?
 
 Just say the word and I’ll refine it. 🦆
+## csq-chat (nested module)
+
+`chat/` is a separate Go module, `github.com/neomantra/CivicSodaQuack/chat`,
+with its own binary `csq-chat`: a terminal chat where a Fantasy-driven model
+calls csq's exported MCP handlers in-process and pushes tables to the screen.
+It imports csq's `internal` packages through a `replace ../` directive, so
+`go test ./...` at the root does not cover it; use `task test` or
+`go -C chat test ./...`. Design and status: `chat/README.md`,
+`docs/superpowers/specs/2026-09-30-csq-chat-design.md`, and the exploration
+report beside it.
+
+Rules that hold across the boundary:
+
+- csq is the instrument; the model is a user of it. Anything the chat can do
+  with data must stay reachable from a `csq` subcommand.
+- Tools resolve rows host-side. The model is told the shape of what was
+  shown, never the rows (`chat/internal/present`).
+- The chat window talks to the agent only through `tui.Chat`; the agent
+  package imports no terminal code.
+
