@@ -29,7 +29,7 @@ func TestRefreshCatalog_HappyPath(t *testing.T) {
 	// FetchCatalogScheme variant. For now, the test exercises the failure path
 	// (fetch fails because http != https) and asserts the per-portal Error is populated.
 	t.Setenv("CSQ_SCHEME", "http") // not currently honored by FetchCatalog; documented gap
-	got, err := refreshCatalogHandler(context.Background(), configs, RefreshCatalogArgs{})
+	got, err := RefreshCatalog(context.Background(), configs, RefreshCatalogArgs{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestRefreshCatalog_HappyPath(t *testing.T) {
 
 func TestRefreshCatalog_UnknownPortal_Errors(t *testing.T) {
 	configs := map[string]*config.Config{"x": {Portal: "x", DB: "/tmp/x.duckdb"}}
-	_, err := refreshCatalogHandler(context.Background(), configs,
+	_, err := RefreshCatalog(context.Background(), configs,
 		RefreshCatalogArgs{Portal: "missing"})
 	if err == nil || !strings.Contains(err.Error(), "no config registered") {
 		t.Errorf("want error mentioning unregistered portal, got %v", err)
@@ -87,7 +87,7 @@ func TestRefreshCatalog_PartialFailure(t *testing.T) {
 	cfgB := makeFakePortalCfg(dbPathB, "127.0.0.1:1", "bbbb-0002") // refused conn
 	configs := map[string]*config.Config{"a": cfgA, "b": cfgB}
 
-	got, err := refreshCatalogHandler(context.Background(), configs, RefreshCatalogArgs{})
+	got, err := RefreshCatalog(context.Background(), configs, RefreshCatalogArgs{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

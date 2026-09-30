@@ -98,7 +98,7 @@ func makeFakePortalCfg(dbPath, host, datasetID string) *config.Config {
 }
 
 func TestSyncDataset_NoConfig_Errors(t *testing.T) {
-	_, err := syncDatasetHandler(context.Background(), map[string]*config.Config{},
+	_, err := SyncDataset(context.Background(), map[string]*config.Config{},
 		SyncDatasetArgs{Portal: "missing", DatasetID: "aaaa-0001"})
 	if err == nil || !strings.Contains(err.Error(), "no config registered") {
 		t.Errorf("want no-config error, got %v", err)
@@ -119,7 +119,7 @@ func TestSyncDataset_HappyPath(t *testing.T) {
 	configs := map[string]*config.Config{"test": cfg}
 
 	t.Setenv("CSQ_SCHEME", "http")
-	res, err := syncDatasetHandler(context.Background(), configs,
+	res, err := SyncDataset(context.Background(), configs,
 		SyncDatasetArgs{Portal: "test", DatasetID: "aaaa-0001"})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -158,7 +158,7 @@ func TestSyncDataset_FullRefresh(t *testing.T) {
 
 	t.Setenv("CSQ_SCHEME", "http")
 	// First sync (bootstrap).
-	if _, err := syncDatasetHandler(context.Background(), configs,
+	if _, err := SyncDataset(context.Background(), configs,
 		SyncDatasetArgs{Portal: "test", DatasetID: "aaaa-0001"}); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestSyncDataset_FullRefresh(t *testing.T) {
 	db.Close()
 
 	// Second sync with full_refresh=true.
-	res, err := syncDatasetHandler(context.Background(), configs,
+	res, err := SyncDataset(context.Background(), configs,
 		SyncDatasetArgs{Portal: "test", DatasetID: "aaaa-0001", FullRefresh: true})
 	if err != nil {
 		t.Fatalf("full refresh: %v", err)
@@ -197,7 +197,7 @@ func TestSyncDataset_UnknownDataset_Failed(t *testing.T) {
 	configs := map[string]*config.Config{"test": cfg}
 
 	t.Setenv("CSQ_SCHEME", "http")
-	res, err := syncDatasetHandler(context.Background(), configs,
+	res, err := SyncDataset(context.Background(), configs,
 		SyncDatasetArgs{Portal: "test", DatasetID: "zzzz-9999"})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

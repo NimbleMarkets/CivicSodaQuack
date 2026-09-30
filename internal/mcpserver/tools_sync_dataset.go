@@ -32,10 +32,10 @@ type SyncDatasetResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// syncDatasetHandler runs sync.Run for one dataset using the registered config
+// SyncDataset runs sync.Run for one dataset using the registered config
 // for the portal. Returns nil error for in-band failures; the result's Status
 // and Error fields carry the outcome.
-func syncDatasetHandler(ctx context.Context, configs map[string]*config.Config,
+func SyncDataset(ctx context.Context, configs map[string]*config.Config,
 	args SyncDatasetArgs) (SyncDatasetResult, error) {
 
 	cfg, ok := configs[args.Portal]

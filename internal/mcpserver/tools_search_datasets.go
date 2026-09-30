@@ -15,14 +15,14 @@ type SearchDatasetsArgs struct {
 	Portal string `json:"portal,omitempty" jsonschema:"optional portal alias filter"`
 }
 
-// searchDatasetsHandler returns datasets whose name or description contain the
+// SearchDatasets returns datasets whose name or description contain the
 // query (case-insensitive substring) or whose tag list contains the query
 // (case-insensitive exact match).
-func searchDatasetsHandler(ctx context.Context, p *Pools, args SearchDatasetsArgs) ([]DatasetSummary, error) {
+func SearchDatasets(ctx context.Context, p *Pools, args SearchDatasetsArgs) ([]DatasetSummary, error) {
 	if strings.TrimSpace(args.Query) == "" {
 		return nil, fmt.Errorf("query must not be empty")
 	}
-	all, err := listDatasetsHandler(ctx, p, ListDatasetsArgs{Portal: args.Portal})
+	all, err := ListDatasets(ctx, p, ListDatasetsArgs{Portal: args.Portal})
 	if err != nil {
 		return nil, err
 	}

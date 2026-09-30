@@ -91,7 +91,7 @@ func (p *Pools) Close() error {
 // openDB opens a *sql.DB for the given path with read-write access.
 // Phase 3 uses a single writeable pool per portal; engine-level read-only
 // enforcement for user SQL happens at the host via BEGIN TRANSACTION READ ONLY
-// (see querySQLHandler).
+// (see QuerySQL).
 func openDB(path string) (*sql.DB, error) {
 	db, err := sql.Open("duckdb", path)
 	if err != nil {

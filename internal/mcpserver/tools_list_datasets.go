@@ -26,9 +26,9 @@ type DatasetSummary struct {
 	RowCount  *int64 `json:"row_count,omitempty"`
 }
 
-// listDatasetsHandler enumerates datasets across the requested portal (or all
+// ListDatasets enumerates datasets across the requested portal (or all
 // portals) with optional category substring filter.
-func listDatasetsHandler(ctx context.Context, p *Pools, args ListDatasetsArgs) ([]DatasetSummary, error) {
+func ListDatasets(ctx context.Context, p *Pools, args ListDatasetsArgs) ([]DatasetSummary, error) {
 	aliases := selectPortals(p, args.Portal)
 	out := make([]DatasetSummary, 0, len(aliases)*4)
 

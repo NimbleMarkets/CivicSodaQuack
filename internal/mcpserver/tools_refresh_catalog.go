@@ -32,10 +32,10 @@ type RefreshCatalogResultList struct {
 	Results []RefreshCatalogResult `json:"results"`
 }
 
-// refreshCatalogHandler refetches /api/catalog/v1 for the requested portal (or
+// RefreshCatalog refetches /api/catalog/v1 for the requested portal (or
 // every registered portal) and upserts _csq.catalog. Per-portal failures don't
 // abort the batch; they're reflected in the per-result Error field.
-func refreshCatalogHandler(ctx context.Context, configs map[string]*config.Config,
+func RefreshCatalog(ctx context.Context, configs map[string]*config.Config,
 	args RefreshCatalogArgs) (RefreshCatalogResultList, error) {
 
 	var aliases []string

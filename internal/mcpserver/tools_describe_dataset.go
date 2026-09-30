@@ -42,10 +42,10 @@ type SyncInfo struct {
 	DurationMs  int64     `json:"duration_ms"`
 }
 
-// describeDatasetHandler returns the merged catalog + columns + last-sync detail
+// DescribeDataset returns the merged catalog + columns + last-sync detail
 // for the requested dataset. Errors when the id is not found or when it is
 // ambiguous across portals and no portal is specified.
-func describeDatasetHandler(ctx context.Context, p *Pools, args DescribeDatasetArgs) (DatasetDetail, error) {
+func DescribeDataset(ctx context.Context, p *Pools, args DescribeDatasetArgs) (DatasetDetail, error) {
 	if args.Portal != "" {
 		if _, ok := p.Portals[args.Portal]; !ok {
 			return DatasetDetail{}, fmt.Errorf("portal %q not attached", args.Portal)

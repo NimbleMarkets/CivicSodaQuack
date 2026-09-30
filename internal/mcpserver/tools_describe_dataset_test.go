@@ -22,7 +22,7 @@ func TestDescribeDataset_Found(t *testing.T) {
 		})
 	defer cleanup()
 
-	got, err := describeDatasetHandler(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001"})
+	got, err := DescribeDataset(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001"})
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestDescribeDataset_NeverSynced(t *testing.T) {
 		FixtureDataset{ID: "aaaa-0001", Name: "X"})
 	defer cleanup()
 
-	got, err := describeDatasetHandler(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001"})
+	got, err := DescribeDataset(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001"})
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestDescribeDataset_Unknown(t *testing.T) {
 		FixtureDataset{ID: "aaaa-0001", Name: "X"})
 	defer cleanup()
 
-	_, err := describeDatasetHandler(context.Background(), pools, DescribeDatasetArgs{DatasetID: "zzzz-9999"})
+	_, err := DescribeDataset(context.Background(), pools, DescribeDatasetArgs{DatasetID: "zzzz-9999"})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("want not-found error, got %v", err)
 	}
@@ -92,12 +92,12 @@ func TestDescribeDataset_AmbiguousAcrossPortals(t *testing.T) {
 	}
 	defer pools.Close()
 
-	_, err = describeDatasetHandler(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001"})
+	_, err = DescribeDataset(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001"})
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Errorf("want ambiguous error, got %v", err)
 	}
 	// Disambiguating with portal works
-	got, err := describeDatasetHandler(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001", Portal: "b"})
+	got, err := DescribeDataset(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001", Portal: "b"})
 	if err != nil {
 		t.Fatalf("disambiguated: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestDescribeDataset_UnknownPortal(t *testing.T) {
 		FixtureDataset{ID: "aaaa-0001", Name: "X"})
 	defer cleanup()
 
-	_, err := describeDatasetHandler(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001", Portal: "nope"})
+	_, err := DescribeDataset(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001", Portal: "nope"})
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Errorf("want unknown-portal error mentioning nope, got %v", err)
 	}

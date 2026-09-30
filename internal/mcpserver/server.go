@@ -67,7 +67,7 @@ func buildServer(pools *Pools, configs map[string]*config.Config) (*mcp.Server, 
 		Name:        "list_datasets",
 		Description: "List datasets available across attached portal DuckDB files. Use the optional 'portal' or 'category' filters to narrow the result.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args ListDatasetsArgs) (*mcp.CallToolResult, DatasetList, error) {
-		out, err := listDatasetsHandler(ctx, pools, args)
+		out, err := ListDatasets(ctx, pools, args)
 		if err != nil {
 			return nil, DatasetList{}, err
 		}
@@ -78,7 +78,7 @@ func buildServer(pools *Pools, configs map[string]*config.Config) (*mcp.Server, 
 		Name:        "describe_dataset",
 		Description: "Return columns, last sync info, and tags for one dataset. Pass 'portal' if dataset_id is ambiguous across portals.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args DescribeDatasetArgs) (*mcp.CallToolResult, DatasetDetail, error) {
-		out, err := describeDatasetHandler(ctx, pools, args)
+		out, err := DescribeDataset(ctx, pools, args)
 		if err != nil {
 			return nil, DatasetDetail{}, err
 		}
@@ -89,7 +89,7 @@ func buildServer(pools *Pools, configs map[string]*config.Config) (*mcp.Server, 
 		Name:        "search_datasets",
 		Description: "Substring match on dataset name, description, and tags (case-insensitive).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args SearchDatasetsArgs) (*mcp.CallToolResult, DatasetList, error) {
-		out, err := searchDatasetsHandler(ctx, pools, args)
+		out, err := SearchDatasets(ctx, pools, args)
 		if err != nil {
 			return nil, DatasetList{}, err
 		}
@@ -100,7 +100,7 @@ func buildServer(pools *Pools, configs map[string]*config.Config) (*mcp.Server, 
 		Name:        "query_sql",
 		Description: "Run a read-only DuckDB SELECT across all attached portals. Cross-portal queries: <alias>.<schema>.<table>. Capped at 1000 rows / 1MB / 30s.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args QuerySQLArgs) (*mcp.CallToolResult, QuerySQLResult, error) {
-		out, err := querySQLHandler(ctx, pools, args, queryTimeout)
+		out, err := QuerySQL(ctx, pools, args, queryTimeout)
 		if err != nil {
 			return nil, QuerySQLResult{}, err
 		}
@@ -118,7 +118,7 @@ func buildServer(pools *Pools, configs map[string]*config.Config) (*mcp.Server, 
 			Name:        "sync_dataset",
 			Description: "Sync one dataset by ID for a registered portal. Set full_refresh=true to bootstrap (full-replace) instead of delta. Blocks until the sync finishes.",
 		}, func(ctx context.Context, req *mcp.CallToolRequest, args SyncDatasetArgs) (*mcp.CallToolResult, SyncDatasetResult, error) {
-			out, err := syncDatasetHandler(ctx, configs, args)
+			out, err := SyncDataset(ctx, configs, args)
 			if err != nil {
 				return nil, SyncDatasetResult{}, err
 			}
@@ -128,7 +128,7 @@ func buildServer(pools *Pools, configs map[string]*config.Config) (*mcp.Server, 
 			Name:        "refresh_catalog",
 			Description: "Refetch /api/catalog/v1 for one or all registered portals and upsert _csq.catalog. Per-portal failures don't abort the batch.",
 		}, func(ctx context.Context, req *mcp.CallToolRequest, args RefreshCatalogArgs) (*mcp.CallToolResult, RefreshCatalogResultList, error) {
-			out, err := refreshCatalogHandler(ctx, configs, args)
+			out, err := RefreshCatalog(ctx, configs, args)
 			if err != nil {
 				return nil, RefreshCatalogResultList{}, err
 			}

@@ -22,7 +22,7 @@ func TestQuerySQL_HappySelect(t *testing.T) {
 		})
 	defer cleanup()
 
-	got, err := querySQLHandler(context.Background(), pools,
+	got, err := QuerySQL(context.Background(), pools,
 		QuerySQLArgs{SQL: `SELECT socrata_id, score FROM test.main.crimes ORDER BY socrata_id`}, time.Second)
 	if err != nil {
 		t.Fatalf("query: %v", err)
@@ -43,7 +43,7 @@ func TestQuerySQL_RejectsWrites(t *testing.T) {
 		FixtureDataset{ID: "aaaa-0001", Name: "X"})
 	defer cleanup()
 
-	_, err := querySQLHandler(context.Background(), pools,
+	_, err := QuerySQL(context.Background(), pools,
 		QuerySQLArgs{SQL: `CREATE TABLE main.evil (x INT)`}, time.Second)
 	if err == nil {
 		t.Fatal("CREATE TABLE should be rejected")
@@ -59,7 +59,7 @@ func TestQuerySQL_TruncatesByRowCap(t *testing.T) {
 	defer cleanup()
 
 	// Use a generate_series query to make 2000 synthetic rows
-	got, err := querySQLHandler(context.Background(), pools,
+	got, err := QuerySQL(context.Background(), pools,
 		QuerySQLArgs{SQL: `SELECT * FROM range(0, 2000)`}, 5*time.Second)
 	if err != nil {
 		t.Fatalf("query: %v", err)
@@ -81,7 +81,7 @@ func TestQuerySQL_Timeout(t *testing.T) {
 	defer cleanup()
 
 	// 1ms timeout against a query that takes longer than that to return any rows
-	_, err := querySQLHandler(context.Background(), pools,
+	_, err := QuerySQL(context.Background(), pools,
 		QuerySQLArgs{SQL: `SELECT * FROM range(0, 100000000)`}, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Errorf("want timeout error, got %v", err)
@@ -108,7 +108,7 @@ func TestQuerySQL_CrossPortal(t *testing.T) {
 	}
 	defer pools.Close()
 
-	got, err := querySQLHandler(context.Background(), pools,
+	got, err := QuerySQL(context.Background(), pools,
 		QuerySQLArgs{SQL: `SELECT a.id FROM a.main.items a JOIN b.main.items b ON a.id = b.id`}, time.Second)
 	if err != nil {
 		t.Fatalf("cross-portal: %v", err)
@@ -126,7 +126,7 @@ func TestQuerySQL_TruncatesByByteCap(t *testing.T) {
 	// Generate a small number of rows but with very large per-row payload
 	// so the byte cap (1MB) trips before the row cap (1000).
 	// repeat('x', N) produces an N-char string. 50 rows * ~30KB each = ~1.5MB.
-	got, err := querySQLHandler(context.Background(), pools,
+	got, err := QuerySQL(context.Background(), pools,
 		QuerySQLArgs{SQL: `SELECT i AS n, repeat('x', 30000) AS payload FROM range(0, 50) t(i)`}, 5*time.Second)
 	if err != nil {
 		t.Fatalf("query: %v", err)
@@ -147,7 +147,7 @@ func TestQuerySQL_ParseErrorReturnsDuckDBMessage(t *testing.T) {
 		FixtureDataset{ID: "aaaa-0001", Name: "X"})
 	defer cleanup()
 
-	_, err := querySQLHandler(context.Background(), pools,
+	_, err := QuerySQL(context.Background(), pools,
 		QuerySQLArgs{SQL: `THIS IS NOT VALID SQL AT ALL`}, time.Second)
 	if err == nil {
 		t.Fatal("want parse error")

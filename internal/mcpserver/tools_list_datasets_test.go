@@ -24,7 +24,7 @@ func TestListDatasets_Empty(t *testing.T) {
 	pools, cleanup := openFixturePools(t)
 	defer cleanup()
 
-	got, err := listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{})
+	got, err := ListDatasets(context.Background(), pools, ListDatasetsArgs{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestListDatasets_OnePortal(t *testing.T) {
 		})
 	defer cleanup()
 
-	got, err := listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{})
+	got, err := ListDatasets(context.Background(), pools, ListDatasetsArgs{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestListDatasets_NeverSynced_RowCountNil(t *testing.T) {
 		FixtureDataset{ID: "aaaa-0001", Name: "Crimes", Category: "Safety", Synced: false})
 	defer cleanup()
 
-	got, _ := listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{})
+	got, _ := ListDatasets(context.Background(), pools, ListDatasetsArgs{})
 	if len(got) != 1 || got[0].RowCount != nil {
 		t.Errorf("RowCount should be nil for un-synced dataset; got %+v", got)
 	}
@@ -85,11 +85,11 @@ func TestListDatasets_PortalFilter(t *testing.T) {
 		FixtureDataset{ID: "bbbb-0002", Name: "B"})
 	defer cleanup()
 
-	got, _ := listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{Portal: "missing"})
+	got, _ := ListDatasets(context.Background(), pools, ListDatasetsArgs{Portal: "missing"})
 	if len(got) != 0 {
 		t.Errorf("portal=missing should return empty, got %d", len(got))
 	}
-	got, _ = listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{Portal: "test"})
+	got, _ = ListDatasets(context.Background(), pools, ListDatasetsArgs{Portal: "test"})
 	if len(got) != 2 {
 		t.Errorf("portal=test should return 2, got %d", len(got))
 	}
@@ -101,7 +101,7 @@ func TestListDatasets_CategoryFilterCaseInsensitive(t *testing.T) {
 		FixtureDataset{ID: "bbbb-0002", Name: "B", Category: "Parks"})
 	defer cleanup()
 
-	got, _ := listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{Category: "safety"})
+	got, _ := ListDatasets(context.Background(), pools, ListDatasetsArgs{Category: "safety"})
 	if len(got) != 1 || got[0].DatasetID != "aaaa-0001" {
 		ids := sort.StringSlice{}
 		for _, d := range got {
@@ -123,7 +123,7 @@ func TestListDatasets_TwoPortals(t *testing.T) {
 	}
 	defer pools.Close()
 
-	got, err := listDatasetsHandler(context.Background(), pools, ListDatasetsArgs{})
+	got, err := ListDatasets(context.Background(), pools, ListDatasetsArgs{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

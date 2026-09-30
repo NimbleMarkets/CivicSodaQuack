@@ -30,7 +30,7 @@ type QuerySQLResult struct {
 	Note      string   `json:"note,omitempty"`
 }
 
-// querySQLHandler executes args.SQL against the host inside a read-only
+// QuerySQL executes args.SQL against the host inside a read-only
 // transaction (DuckDB rejects DDL/DML at the engine level), capping the result
 // at maxRows or maxBytes (whichever first), and aborting after timeout.
 //
@@ -40,7 +40,7 @@ type QuerySQLResult struct {
 // for the duration of one query. We acquire a single *sql.Conn so the BEGIN
 // and the SELECT share the same physical connection — database/sql's *sql.Tx
 // helpers don't expose DuckDB's read-only flag.
-func querySQLHandler(parent context.Context, p *Pools, args QuerySQLArgs, timeout time.Duration) (QuerySQLResult, error) {
+func QuerySQL(parent context.Context, p *Pools, args QuerySQLArgs, timeout time.Duration) (QuerySQLResult, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
