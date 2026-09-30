@@ -40,7 +40,7 @@ Set `SOCRATA_APP_TOKEN` (referenced in the YAML as `${SOCRATA_APP_TOKEN}`) to li
 ./csq mcp --db data.cityofchicago.org.duckdb --http 127.0.0.1:8080
 ```
 
-The MCP server exposes four read tools: `list_datasets`, `describe_dataset`, `search_datasets`, and `query_sql`. The `query_sql` tool runs read-only DuckDB SQL across every attached portal; cross-portal queries use `<alias>.<schema>.<table>`, e.g. `SELECT * FROM chicago._csq.catalog UNION ALL SELECT * FROM nyc._csq.catalog`. Results are capped at 1000 rows / 1MB / 30s.
+The MCP server exposes four read tools: `list_datasets`, `describe_dataset`, `search_datasets`, and `query_sql`. The `query_sql` tool runs read-only DuckDB SQL across every attached portal; cross-portal queries use `<alias>.<schema>.<table>`, e.g. `SELECT * FROM chicago._csq.catalog UNION ALL SELECT * FROM nyc._csq.catalog`. Results are capped at 1000 rows / 1MB / 30s. Queries run in a read-only transaction with DuckDB external access disabled, so SQL cannot write, read local files, or fetch URLs.
 
 Pair `--db` with `--config` (positionally) to enable two write tools:
 

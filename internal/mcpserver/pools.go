@@ -67,6 +67,16 @@ func OpenPools(specs []DBSpec) (*Pools, error) {
 		}
 		p.Portals[spec.Alias] = &PortalPools{Path: spec.Path, DB: db}
 	}
+
+	// User SQL runs inside BEGIN TRANSACTION READ ONLY, which stops writes but
+	// not read_csv('/any/path') or httpfs reads. Latch external access off now
+	// that every ATTACH is done; DuckDB does not allow turning it back on, so
+	// a host that needs a new attach must be rebuilt. The setting is global to
+	// the host instance, so it covers every pooled connection.
+	if _, err := host.Exec(`SET enable_external_access = false`); err != nil {
+		p.Close()
+		return nil, fmt.Errorf("disable external access on host: %w", err)
+	}
 	return p, nil
 }
 

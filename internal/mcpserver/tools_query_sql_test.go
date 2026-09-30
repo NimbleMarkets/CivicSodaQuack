@@ -4,6 +4,8 @@ package mcpserver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -156,5 +158,42 @@ func TestQuerySQL_ParseErrorReturnsDuckDBMessage(t *testing.T) {
 	msg := strings.ToLower(err.Error())
 	if !strings.Contains(msg, "parser") && !strings.Contains(msg, "syntax") {
 		t.Errorf("error should reflect DuckDB parser/syntax message; got: %v", err)
+	}
+}
+
+// A read-only transaction stops writes but not read_csv() on an arbitrary
+// path, so the host latches enable_external_access=false after attaching.
+// Attached portal reads must keep working after the latch.
+func TestQuerySQL_BlocksExternalFileAccess(t *testing.T) {
+	pools, cleanup := openFixturePools(t,
+		FixtureDataset{
+			ID: "aaaa-0001", Name: "Crimes",
+			TableName:  "crimes",
+			ColumnDefs: []string{"socrata_id VARCHAR", "score DOUBLE"},
+			Rows:       []map[string]any{{"socrata_id": "a", "score": 1.0}},
+		})
+	defer cleanup()
+
+	outside := filepath.Join(t.TempDir(), "outside.csv")
+	if err := os.WriteFile(outside, []byte("a,b\n1,secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := QuerySQL(context.Background(), pools,
+		QuerySQLArgs{SQL: `SELECT * FROM read_csv('` + outside + `')`}, time.Second)
+	if err == nil {
+		t.Fatal("read_csv on a path outside the database succeeded; expected a permission error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "disabled") {
+		t.Errorf("error should say file access is disabled, got: %v", err)
+	}
+
+	got, err := QuerySQL(context.Background(), pools,
+		QuerySQLArgs{SQL: `SELECT socrata_id FROM test.main.crimes`}, time.Second)
+	if err != nil {
+		t.Fatalf("attached read after latch: %v", err)
+	}
+	if got.RowCount != 1 {
+		t.Errorf("rowcount=%d", got.RowCount)
 	}
 }
