@@ -25,6 +25,10 @@ bin/csq-chat --db chicago=.csq/chicago.duckdb -m compat/qwen3:14b --base-url htt
   --prompt "How many COPA cases per year for the last 5 years?"
 ```
 
+A headless run prints the tables and charts as JSON; each chart is also drawn
+at 80×20 with styling removed in the `rendered` array, so a run can be read
+without a terminal.
+
 Models are named `vendor/model`: `anthropic/`, `openai/`, `google/`,
 `openrouter/`, or `compat/` with `--base-url`. Keys come from `--api-key` or
 the vendor's environment variable. There is no embedded model runtime yet.
@@ -57,6 +61,15 @@ Environment variables mirror the main flags: `CSQ_CHAT_MODEL`,
 | `describe_dataset` | `mcpserver.DescribeDataset` | columns, tags, last sync |
 | `query_sql` | `mcpserver.QuerySQL` | CSV, capped at 24 KB |
 | `present_table` | `mcpserver.QuerySQL`, then the screen | title, row count, columns |
+| `present_chart` | `mcpserver.QuerySQL`, flint-ntcharts, then the screen | title, row count, columns, compiler notes |
+
+`present_chart` takes SQL, a typed Flint `chart_spec` (a `chartType` from an
+enum plus `encodings` mapping result columns to channels) and a list of
+`semantic_types`. The host binds the rows as `data.values`, compiles with the
+embedded Flint compiler, and draws the result as a numbered cell that is
+re-fitted on resize. If a chart cannot be drawn the model receives the
+compiler's reason, which names the supported types, and nothing is shown.
+Text charts only: pie, boxplot, waterfall and the like are refused.
 
 `present_table` is the model's default way to answer. The rows are resolved
 here and shown to you; the model is told only the shape, so a large result
@@ -99,7 +112,8 @@ database. The binary's own test runs the headless path through both.
 
 ## Not yet
 
-Charts (the `present.Chart` contract exists; rendering waits on ntcharts
-`spec` and flint-ntcharts releases), 3D, maps, document viewers, a scratchpad,
+Raster charts (flint-ntcharts v0.3.0 can draw more chart types as images over
+Kitty graphics; this build uses the text renderer only), 3D, maps, document
+viewers, a scratchpad,
 a knowledge base, syncing from inside the chat, embedded models, and the
 browser build.

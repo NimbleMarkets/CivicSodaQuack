@@ -39,6 +39,17 @@ type Options struct {
 	MaxToolBytes    int           // per tool result sent to the model, default 24000
 	PresentRowCap   int           // rows pushed to the screen per table, default 500
 	Timeout         time.Duration // per turn, default 2m
+
+	// Charts checks chart specs before they are shown. When nil the
+	// present_chart tool is not offered to the model at all.
+	Charts ChartChecker
+}
+
+// ChartChecker validates that a chart can be drawn. It returns the
+// compiler's own error (which names the supported chart types) so the model
+// can correct itself, and any warnings about approximations.
+type ChartChecker interface {
+	Check(c present.Chart) (warnings []string, err error)
 }
 
 func (o Options) withDefaults() Options {
@@ -134,7 +145,7 @@ func New(model fantasy.LanguageModel, store data.Store, opts Options) *Runner {
 	opts = opts.withDefaults()
 	r := &Runner{model: model, store: store, opts: opts}
 	r.agent = fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(systemPrompt(store.Portals(), time.Now())),
+		fantasy.WithSystemPrompt(systemPrompt(store.Portals(), time.Now(), opts.Charts != nil)),
 		fantasy.WithTools(tools(store, opts)...),
 		fantasy.WithStopConditions(fantasy.StepCountIs(opts.MaxSteps)),
 		fantasy.WithMaxOutputTokens(opts.MaxOutputTokens),
@@ -152,12 +163,32 @@ func Open(ctx context.Context, store data.Store, opts Options) (*Runner, error) 
 	return New(model, store, opts), nil
 }
 
-func systemPrompt(portals []string, now time.Time) string {
+const chartToolLine = "- `present_chart(sql, title, chart_spec, semantic_types)` draws a chart from the SQL rows on the person's screen. Use it when the shape is the answer: a trend over time, a comparison across categories, a distribution. Use `present_table` when the exact values are the answer.\n"
+
+const chartGuidance = `## Charts
+
+- Aggregate in SQL first, then chart the result: one row per bar, point, or cell. A chart drawn from raw records is unreadable.
+- Name result columns in the encodings exactly; alias them in SQL if needed.
+- Line Chart or Bar Chart with the time or category on x and the measure on y covers most questions. Heatmap needs x, y, and color (the cell value). Histogram and ECDF Plot take one measured column on x.
+- Time on x: select an ISO date (` + "`date_trunc('month', col)::DATE`" + ` for monthly) or a plain year number, and mark it DateTime in semantic_types.
+- Mark code columns (ward, district, beat, ZIP, community area) as ID. Never put them on y.
+- The text renderer cannot draw pie, boxplot, or waterfall charts. If a chart is refused, the reason comes back; fix the spec or answer with a table.
+- A chart cell is small. It shows shape, not exact values; follow it with a one-line takeaway, and offer a table if exact numbers matter.
+
+`
+
+func systemPrompt(portals []string, now time.Time, charts bool) string {
 	list := strings.Join(portals, ", ")
 	if list == "" {
 		list = "(none)"
 	}
 	s := strings.ReplaceAll(systemPromptTemplate, "{{portals}}", list)
+	tool, guidance := "", ""
+	if charts {
+		tool, guidance = chartToolLine, chartGuidance
+	}
+	s = strings.ReplaceAll(s, "{{chart_tool}}", tool)
+	s = strings.ReplaceAll(s, "{{chart_guidance}}", guidance)
 	return strings.TrimSpace(s) + "\n\nToday is " + now.UTC().Format("2006-01-02") + "."
 }
 

@@ -4,9 +4,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -207,13 +207,67 @@ func TestFitColumns_ShrinksWidestFirst(t *testing.T) {
 	}
 }
 
-func TestRenderCell_ChartSaysNotWired(t *testing.T) {
+type fakeCharts struct {
+	gotW, gotH int
+	err        error
+	warnings   []string
+}
+
+func (f *fakeCharts) Render(_ present.Chart, w, h int) (string, []string, error) {
+	f.gotW, f.gotH = w, h
+	if f.err != nil {
+		return "", nil, f.err
+	}
+	return "<<chart>>", f.warnings, nil
+}
+
+func chartPresentation(truncated bool) present.Presentation {
+	return present.Presentation{Kind: present.KindChart, Title: "trend", Chart: &present.Chart{
+		Table: present.Table{Columns: []string{"m", "n"}, Rows: [][]string{{"1", "2"}}, Total: 1, Truncated: truncated},
+	}}
+}
+
+func TestRenderCell_ChartWithoutRendererSaysSo(t *testing.T) {
 	m := newTestModel(&fakeChat{})
-	m.addCell(present.Presentation{Kind: present.KindChart, Title: "trend", Chart: &present.Chart{
-		Table: present.Table{Columns: []string{"m", "n"}, Rows: [][]string{{"1", "2"}}, Total: 1},
-	}})
-	if out := plain(m); !strings.Contains(out, "[1] trend") || !strings.Contains(out, "not wired") {
+	m.addCell(chartPresentation(false))
+	if out := plain(m); !strings.Contains(out, "[1] trend") || !strings.Contains(out, "no chart renderer") {
 		t.Errorf("chart cell:\n%s", out)
 	}
-	_ = time.Now
+}
+
+func TestRenderCell_ChartIsDrawnAtTheCellWidthAndShowsNotes(t *testing.T) {
+	fc := &fakeCharts{warnings: []string{"info approximation: drawn as a line"}}
+	m := newTestModel(&fakeChat{}).WithCharts(fc)
+	m.addCell(chartPresentation(true))
+	out := plain(m)
+	for _, want := range []string{"[1] trend", "<<chart>>", "1 row(s)", "row cap", "note: info approximation"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("screen lacks %q:\n%s", want, out)
+		}
+	}
+	if fc.gotW != 78 || fc.gotH < 8 || fc.gotH > 18 {
+		t.Errorf("rendered at %dx%d", fc.gotW, fc.gotH)
+	}
+}
+
+func TestRenderCell_ChartErrorShowsInPlace(t *testing.T) {
+	m := newTestModel(&fakeChat{}).WithCharts(&fakeCharts{err: errors.New("boom")})
+	m.addCell(chartPresentation(false))
+	if out := plain(m); !strings.Contains(out, "could not be drawn: boom") {
+		t.Errorf("chart cell:\n%s", out)
+	}
+}
+
+func TestRenderCell_ChartIsRedrawnAfterResize(t *testing.T) {
+	fc := &fakeCharts{}
+	m := newTestModel(&fakeChat{}).WithCharts(fc)
+	m.addCell(chartPresentation(false))
+	_ = plain(m)
+	first := fc.gotW
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	m = next.(Model)
+	_ = plain(m)
+	if first == fc.gotW || fc.gotW != 58 {
+		t.Errorf("width before %d after %d; the cached render should be dropped on resize", first, fc.gotW)
+	}
 }

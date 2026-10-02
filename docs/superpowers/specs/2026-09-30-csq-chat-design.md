@@ -4,9 +4,10 @@ Date: 2026-09-30. Follows the
 [exploration report](2026-09-29-agent-harness-exploration.md).
 
 Decided by the owner: a nested Go module in this repository, with Fantasy as
-the agent runtime. The ntcharts and flint-ntcharts relationship is being worked
-out separately, so this slice stops at the chart contract and does not render
-charts.
+the agent runtime. The ntcharts and flint-ntcharts relationship was being worked
+out separately, so the first commits stopped at the chart contract. Both are
+now released (ntcharts v2.6.0, flint-ntcharts v0.3.0) and `present_chart`
+renders through flint-ntcharts' text renderer.
 
 ## Goal
 
@@ -61,9 +62,11 @@ A tool pushes a presentation through a `PresentFunc` carried in the context,
 as dank-bot420 does. The rows are resolved host-side; the model receives a
 summary, never the rows.
 
-`Chart` is defined so the tool surface and the session format are settled now.
-The `present_chart` tool registers only when the runner is given a renderer,
-and this slice provides none.
+The `present_chart` tool registers only when the runner is given a
+`ChartChecker`. Its schema is typed (chart type enum, channel structs, a list
+of semantic types) because Fantasy renders `map[string]any` as a schema with a
+literal `"*"` property, and a local model followed it by wrapping the spec in
+a `"*"` key.
 
 ## Tools
 
@@ -74,6 +77,7 @@ and this slice provides none.
 | `describe_dataset` | `mcpserver.DescribeDataset` | columns, last sync, tags |
 | `query_sql` | `mcpserver.QuerySQL` | CSV, capped by bytes |
 | `present_table` | `mcpserver.QuerySQL` then push | title, row count, columns |
+| `present_chart` | `mcpserver.QuerySQL`, Flint compile, then push | title, row count, columns, compiler notes |
 
 Sync is not in this slice. It writes to disk and reaches a public API, so it
 needs a confirmation path in the UI first.
@@ -120,5 +124,5 @@ the test surface for the agent and the sample surface for scripts.
 
 ## Out of this slice
 
-Charts, 3D, maps, viewers, scratchpad, knowledge base, sync from chat, embedded
+Raster charts, 3D, maps, viewers, scratchpad, knowledge base, sync from chat, embedded
 models, the browser build.

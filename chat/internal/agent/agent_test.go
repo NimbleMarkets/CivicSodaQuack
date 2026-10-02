@@ -186,7 +186,7 @@ func TestParseModel(t *testing.T) {
 func TestSystemPrompt_NamesPortals(t *testing.T) {
 	r := New(agenttest.NewFakeModel(), seedStore(t), Options{})
 	_ = r
-	got := systemPrompt([]string{"chicago", "nyc"}, testDate())
+	got := systemPrompt([]string{"chicago", "nyc"}, testDate(), false)
 	if !strings.Contains(got, "Attached portals: chicago, nyc") || !strings.Contains(got, "Today is 2026-09-30") {
 		t.Errorf("prompt: %q", got[:200])
 	}
@@ -217,5 +217,16 @@ func TestAsk_EmptyReplyAfterTablePointsAtIt(t *testing.T) {
 	}
 	if resp.Presented != 1 || resp.Text != "See the table above." {
 		t.Errorf("response = %+v", resp)
+	}
+}
+
+func TestSystemPrompt_ChartsOnlyWhenARendererExists(t *testing.T) {
+	without := systemPrompt([]string{"a"}, testDate(), false)
+	with := systemPrompt([]string{"a"}, testDate(), true)
+	if strings.Contains(without, "present_chart") || strings.Contains(without, "## Charts") || strings.Contains(without, "{{") {
+		t.Errorf("prompt without charts mentions them or has unfilled placeholders:\n%s", without)
+	}
+	if !strings.Contains(with, "present_chart") || !strings.Contains(with, "## Charts") || strings.Contains(with, "{{") {
+		t.Errorf("prompt with charts lacks the tool or guidance, or has placeholders:\n%s", with)
 	}
 }

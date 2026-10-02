@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/neomantra/CivicSodaQuack/chat/internal/present"
@@ -68,8 +69,38 @@ func (s *store) ListDatasets(ctx context.Context, portal, category string) ([]mc
 	return mcpserver.ListDatasets(ctx, s.pools, mcpserver.ListDatasetsArgs{Portal: portal, Category: category})
 }
 
+// SearchDatasets matches datasets whose name, description, or tags contain
+// every word of query. csq's own search treats the whole query as one
+// substring, so "copa complaints" finds nothing even when "copa" does; people
+// and models type phrases, so the chat splits them and intersects the hits.
 func (s *store) SearchDatasets(ctx context.Context, portal, query string) ([]mcpserver.DatasetSummary, error) {
-	return mcpserver.SearchDatasets(ctx, s.pools, mcpserver.SearchDatasetsArgs{Portal: portal, Query: query})
+	words := strings.Fields(query)
+	if len(words) <= 1 {
+		return mcpserver.SearchDatasets(ctx, s.pools, mcpserver.SearchDatasetsArgs{Portal: portal, Query: strings.Join(words, "")})
+	}
+	var out []mcpserver.DatasetSummary
+	for i, w := range words {
+		hits, err := mcpserver.SearchDatasets(ctx, s.pools, mcpserver.SearchDatasetsArgs{Portal: portal, Query: w})
+		if err != nil {
+			return nil, err
+		}
+		if i == 0 {
+			out = hits
+			continue
+		}
+		keep := make(map[string]bool, len(hits))
+		for _, h := range hits {
+			keep[h.Portal+"/"+h.DatasetID] = true
+		}
+		kept := out[:0]
+		for _, d := range out {
+			if keep[d.Portal+"/"+d.DatasetID] {
+				kept = append(kept, d)
+			}
+		}
+		out = kept
+	}
+	return out, nil
 }
 
 func (s *store) DescribeDataset(ctx context.Context, id, portal string) (mcpserver.DatasetDetail, error) {

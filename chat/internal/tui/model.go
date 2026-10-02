@@ -27,6 +27,12 @@ type Chat interface {
 	Model() string
 }
 
+// ChartView draws a chart into a w×h cell area. The window holds it as an
+// interface so it never imports the compiler.
+type ChartView interface {
+	Render(c present.Chart, w, h int) (view string, warnings []string, err error)
+}
+
 // Info is static text for the header and /status.
 type Info struct {
 	Portals     []string
@@ -65,6 +71,7 @@ func (c *cell) label() string { return fmt.Sprintf("[%d] %s", c.index, c.p.Title
 type Model struct {
 	ctx    context.Context
 	chat   Chat
+	charts ChartView
 	info   Info
 	styles styles
 
@@ -110,6 +117,13 @@ type showMsg struct {
 }
 
 type tickMsg time.Time
+
+// WithCharts lets the window draw chart cells. Without it a chart cell says
+// so rather than showing nothing.
+func (m Model) WithCharts(v ChartView) Model {
+	m.charts = v
+	return m
+}
 
 // Init satisfies tea.Model. There is no startup work in this slice.
 func (m Model) Init() tea.Cmd { return nil }

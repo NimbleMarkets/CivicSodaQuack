@@ -26,7 +26,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	flag "github.com/spf13/pflag"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/neomantra/CivicSodaQuack/chat/internal/agent"
+	"github.com/neomantra/CivicSodaQuack/chat/internal/chart"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/data"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/present"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/session"
@@ -129,8 +132,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	defer store.Close()
 
+	charts, err := chart.New(ctx)
+	if err != nil {
+		return err
+	}
+	defer charts.Close(context.Background())
+
 	opts := agent.Options{
-		Model: o.model, BaseURL: o.baseURL, APIKey: o.apiKey,
+		Charts: charts,
+		Model:  o.model, BaseURL: o.baseURL, APIKey: o.apiKey,
 		Timeout: o.timeout, MaxSteps: o.maxSteps, MaxOutputTokens: o.maxOutput, MaxHistory: o.maxHistory,
 	}
 	model, err := newModel(ctx, opts)
@@ -151,9 +161,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	chat := &recordedChat{runner: runner, rec: rec, logger: logger}
 	if o.prompt != "" {
-		return runHeadless(ctx, chat, o, stdout, stderr)
+		return runHeadless(ctx, chat, charts, o, stdout, stderr)
 	}
-	return runTUI(ctx, chat, tui.Info{Portals: store.Portals(), SessionPath: rec.Path()})
+	return runTUI(ctx, chat, charts, tui.Info{Portals: store.Portals(), SessionPath: rec.Path()})
 }
 
 // recordedChat is the agent as the window sees it, with every turn written
@@ -185,8 +195,8 @@ func (c *recordedChat) Ask(ctx context.Context, prompt string, progress agent.Pr
 func (c *recordedChat) ClearHistory() { c.runner.ClearHistory() }
 func (c *recordedChat) Model() string { return c.runner.Model() }
 
-func runTUI(ctx context.Context, chat tui.Chat, info tui.Info) error {
-	m := tui.New(ctx, chat, info)
+func runTUI(ctx context.Context, chat tui.Chat, charts tui.ChartView, info tui.Info) error {
+	m := tui.New(ctx, chat, info).WithCharts(charts)
 	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	if errors.Is(err, tea.ErrProgramKilled) || errors.Is(err, context.Canceled) {
 		return nil
@@ -203,9 +213,20 @@ type headlessOutput struct {
 	Steps         int                    `json:"steps"`
 	DurationMS    int64                  `json:"duration_ms"`
 	Presentations []present.Presentation `json:"presentations"`
+	// Rendered holds each chart as plain text, in presentation order, so a
+	// run can be read without a terminal. Tables are not repeated here.
+	Rendered []Rendered `json:"rendered,omitempty"`
 }
 
-func runHeadless(ctx context.Context, chat tui.Chat, o options, stdout, stderr io.Writer) error {
+// Rendered is one chart drawn at 80×20 with styling removed.
+type Rendered struct {
+	Title    string   `json:"title"`
+	Text     string   `json:"text"`
+	Warnings []string `json:"warnings,omitempty"`
+	Error    string   `json:"error,omitempty"`
+}
+
+func runHeadless(ctx context.Context, chat tui.Chat, charts tui.ChartView, o options, stdout, stderr io.Writer) error {
 	var shown []present.Presentation
 	var progress agent.ProgressFunc
 	if o.verbose {
@@ -225,6 +246,19 @@ func runHeadless(ctx context.Context, chat tui.Chat, o options, stdout, stderr i
 	}
 	if out.Presentations == nil {
 		out.Presentations = []present.Presentation{}
+	}
+	for _, p := range shown {
+		if p.Chart == nil {
+			continue
+		}
+		r := Rendered{Title: p.Title}
+		view, warnings, err := charts.Render(*p.Chart, 80, 20)
+		if err != nil {
+			r.Error = err.Error()
+		} else {
+			r.Text, r.Warnings = ansi.Strip(view), warnings
+		}
+		out.Rendered = append(out.Rendered, r)
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")

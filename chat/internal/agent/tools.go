@@ -8,6 +8,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +40,85 @@ type querySQLInput struct {
 type presentTableInput struct {
 	SQL   string `json:"sql" description:"One read-only DuckDB SELECT or WITH statement whose rows are shown to the person."`
 	Title string `json:"title" description:"Short, specific title. The person finds tables again by title."`
+}
+
+// chartTypes are the chart types the text renderer draws, which is also the
+// enum the model sees. The enum tag below must repeat it (tags cannot use
+// constants); TestChartTypesEnumMatchesConstant enforces that.
+const chartTypes = "Bar Chart,Stacked Bar Chart,Line Chart,Scatter Plot,Heatmap,Candlestick Chart,Sparkline,ECDF Plot,Connected Scatter Plot,Bubble Chart,Histogram,Area Chart,Lollipop Chart,Calendar Heatmap"
+
+// The chart spec is typed rather than a free-form map on purpose: Fantasy
+// renders map[string]any as a schema with a literal "*" property, and models
+// follow it by wrapping the whole spec in a "*" key.
+
+type channelInput struct {
+	Field string `json:"field" description:"A column name from the SQL result."`
+}
+
+type encodingsInput struct {
+	X      *channelInput `json:"x,omitempty" description:"Horizontal axis; for Histogram, ECDF Plot and Calendar Heatmap the one measured column."`
+	Y      *channelInput `json:"y,omitempty" description:"Vertical axis (the measure for bar, line, scatter)."`
+	Color  *channelInput `json:"color,omitempty" description:"Colours by this column; for Heatmap, the cell value."`
+	Group  *channelInput `json:"group,omitempty" description:"Splits into one series per value (bar, line, scatter)."`
+	Size   *channelInput `json:"size,omitempty" description:"Marker size (Bubble Chart; drawn as a plain scatter)."`
+	Order  *channelInput `json:"order,omitempty" description:"Connection order (Connected Scatter Plot)."`
+	Detail *channelInput `json:"detail,omitempty" description:"One series per value without colouring."`
+	Open   *channelInput `json:"open,omitempty" description:"Candlestick open."`
+	High   *channelInput `json:"high,omitempty" description:"Candlestick high."`
+	Low    *channelInput `json:"low,omitempty" description:"Candlestick low."`
+	Close  *channelInput `json:"close,omitempty" description:"Candlestick close."`
+}
+
+type chartSpecInput struct {
+	ChartType string         `json:"chartType" enum:"Bar Chart,Stacked Bar Chart,Line Chart,Scatter Plot,Heatmap,Candlestick Chart,Sparkline,ECDF Plot,Connected Scatter Plot,Bubble Chart,Histogram,Area Chart,Lollipop Chart,Calendar Heatmap" description:"Which chart to draw."`
+	Encodings encodingsInput `json:"encodings" description:"Which result column feeds each channel."`
+}
+
+type semanticTypeInput struct {
+	Field string `json:"field" description:"A column name from the SQL result."`
+	Type  string `json:"type" description:"Flint semantic type, e.g. DateTime, Count, Amount, Percent, Rank, Category, ID."`
+}
+
+type presentChartInput struct {
+	SQL           string              `json:"sql" description:"One read-only DuckDB SELECT or WITH statement. Aggregate in SQL; the chart is drawn from these rows."`
+	Title         string              `json:"title" description:"Short, specific title. The person finds charts again by title."`
+	ChartSpec     chartSpecInput      `json:"chart_spec" description:"What to draw."`
+	SemanticTypes []semanticTypeInput `json:"semantic_types,omitempty" description:"What each column means. Mark code columns (ward, district, ZIP, beat) as ID so they are never summed or averaged."`
+}
+
+// spec returns the Flint chart_spec and semantic_types documents, and the
+// columns the encodings name.
+func (in presentChartInput) spec() (chartSpec, semanticTypes json.RawMessage, fields []string) {
+	enc := map[string]map[string]string{}
+	add := func(name string, c *channelInput) {
+		if c != nil && c.Field != "" {
+			enc[name] = map[string]string{"field": c.Field}
+			fields = append(fields, c.Field)
+		}
+	}
+	e := in.ChartSpec.Encodings
+	add("x", e.X)
+	add("y", e.Y)
+	add("color", e.Color)
+	add("group", e.Group)
+	add("size", e.Size)
+	add("order", e.Order)
+	add("detail", e.Detail)
+	add("open", e.Open)
+	add("high", e.High)
+	add("low", e.Low)
+	add("close", e.Close)
+	chartSpec, _ = json.Marshal(map[string]any{"chartType": in.ChartSpec.ChartType, "encodings": enc})
+	if len(in.SemanticTypes) > 0 {
+		types := make(map[string]string, len(in.SemanticTypes))
+		for _, st := range in.SemanticTypes {
+			if st.Field != "" && st.Type != "" {
+				types[st.Field] = st.Type
+			}
+		}
+		semanticTypes, _ = json.Marshal(types)
+	}
+	return chartSpec, semanticTypes, fields
 }
 
 // tools builds the tool set over store. Every tool reports what it did
@@ -134,7 +214,63 @@ func tools(store data.Store, opts Options) []fantasy.AgentTool {
 			})
 		})
 
-	return []fantasy.AgentTool{listDatasets, searchDatasets, describeDataset, querySQL, presentTable}
+	all := []fantasy.AgentTool{listDatasets, searchDatasets, describeDataset, querySQL, presentTable}
+	if opts.Charts != nil {
+		all = append(all, presentChartTool(store, opts))
+	}
+	return all
+}
+
+func presentChartTool(store data.Store, opts Options) fantasy.AgentTool {
+	return fantasy.NewAgentTool("present_chart",
+		"Draw a chart from SQL results on the person's screen. Use it for trends over time, comparisons across categories, distributions, and heatmaps; use present_table for lists and exact values. Aggregate in SQL first (the chart is drawn from the returned rows, at most 1000) and name the result columns in the encodings. You receive only a summary; if the chart cannot be drawn you receive the reason, so correct the spec and call again.",
+		func(ctx context.Context, in presentChartInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return run(ctx, "present_chart", in, opts, func() (string, int, error) {
+				if strings.TrimSpace(in.ChartSpec.ChartType) == "" {
+					return "", 0, fmt.Errorf("chart_spec.chartType is required; one of: %s", strings.ReplaceAll(chartTypes, ",", ", "))
+				}
+				spec, types, fields := in.spec()
+				if len(fields) == 0 {
+					return "", 0, fmt.Errorf("chart_spec.encodings names no columns; map result columns to channels such as x and y")
+				}
+				tbl, err := store.QueryTable(ctx, in.SQL)
+				if err != nil {
+					return "", 0, err
+				}
+				for _, f := range fields {
+					if !slices.Contains(tbl.Columns, f) {
+						return "", tbl.Total, fmt.Errorf("encoding field %q is not a column of the query result (columns: %s); name result columns exactly, or alias them in SQL", f, strings.Join(tbl.Columns, ", "))
+					}
+				}
+				title := strings.TrimSpace(in.Title)
+				if title == "" {
+					title = "chart"
+				}
+				ch := present.Chart{Table: tbl, ChartSpec: spec, SemanticTypes: types}
+				warnings, err := opts.Charts.Check(ch)
+				if err != nil {
+					return "", tbl.Total, fmt.Errorf("the chart could not be drawn: %w (columns returned: %s)", err, strings.Join(tbl.Columns, ", "))
+				}
+				p := present.Presentation{Kind: present.KindChart, Title: title, Chart: &ch}
+				shown := present.Push(ctx, p)
+				emit(ctx, Event{Kind: EventPresent, Message: fmt.Sprintf("charted %q (%d rows)", title, len(tbl.Rows)), Presentation: &p})
+
+				var b strings.Builder
+				if shown {
+					fmt.Fprintf(&b, "Displayed a chart titled %q drawn from %d row(s); columns: %s. It is on the person's screen; add at most a one-line takeaway.",
+						title, tbl.Total, strings.Join(tbl.Columns, ", "))
+				} else {
+					fmt.Fprintf(&b, "No screen is attached, so the chart %q (%d row(s)) was recorded but not displayed. Summarise the result briefly.", title, tbl.Total)
+				}
+				if tbl.Truncated {
+					b.WriteString(" The query hit the row cap, so the chart shows only part of the data; aggregate in SQL to chart all of it.")
+				}
+				for _, w := range warnings {
+					b.WriteString("\nCompiler: " + w)
+				}
+				return b.String(), tbl.Total, nil
+			})
+		})
 }
 
 // run wraps one tool call: it announces the call, times it, records the

@@ -154,9 +154,9 @@ func (m Model) renderInput(width int) string {
 	)
 }
 
-// renderCell draws a presentation. Only tables render in this slice; a chart
-// shows its shape and says the renderer is not wired, so a person is never
-// left wondering whether something was meant to appear.
+// renderCell draws a presentation. A chart that cannot be drawn says why in
+// place, so a person is never left wondering whether something was meant to
+// appear.
 func (m Model) renderCell(c *cell, width int) string {
 	if c.rendered != "" && c.width == width {
 		return c.rendered
@@ -166,15 +166,41 @@ func (m Model) renderCell(c *cell, width int) string {
 	case c.p.Table != nil:
 		out = m.renderTable(c, width)
 	case c.p.Chart != nil:
-		s := c.p.Summary()
-		out = lipgloss.JoinVertical(lipgloss.Left,
-			m.styles.label.Render("▤ "+c.label()),
-			m.styles.meta.Render(fmt.Sprintf("chart over %d row(s) — chart rendering is not wired in this build", s.Total)))
+		out = m.renderChart(c, width)
 	default:
 		out = m.styles.meta.Render(fmt.Sprintf("[%s] %s", c.p.Kind, c.label()))
 	}
 	c.rendered, c.width = out, width
 	return out
+}
+
+// chartHeight is how many rows a chart cell takes: tall enough to read, short
+// enough that the reply beneath it stays on screen.
+func (m Model) chartHeight() int {
+	return min(18, max(8, m.transcriptHeight()-4))
+}
+
+func (m Model) renderChart(c *cell, width int) string {
+	title := m.styles.label.Render("▤ " + c.label())
+	s := c.p.Summary()
+	if m.charts == nil {
+		return lipgloss.JoinVertical(lipgloss.Left, title,
+			m.styles.meta.Render(fmt.Sprintf("chart over %d row(s) — no chart renderer is attached", s.Total)))
+	}
+	view, warnings, err := m.charts.Render(*c.p.Chart, width, m.chartHeight())
+	if err != nil {
+		return lipgloss.JoinVertical(lipgloss.Left, title, m.styles.err.Render("chart could not be drawn: "+err.Error()))
+	}
+	parts := []string{title, view}
+	footer := fmt.Sprintf("%d row(s)", s.Total)
+	if s.Truncated {
+		footer += " (query hit its row cap; the chart shows part of the data)"
+	}
+	parts = append(parts, m.styles.meta.Render(footer))
+	for _, w := range warnings {
+		parts = append(parts, m.styles.meta.Render("note: "+truncate(w, max(10, width-6))))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 const maxCellRows = 500

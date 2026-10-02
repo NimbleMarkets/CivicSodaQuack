@@ -84,3 +84,29 @@ func TestFormatCell(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_SearchMatchesEveryWordNotThePhrase(t *testing.T) {
+	st, err := Open([]string{datatest.SeedDB(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	// "reported crimes" is the description; "public" is not in name/description/tags
+	// of this fixture, and the words are not adjacent in "Crimes ... Reported".
+	for query, want := range map[string]int{
+		"crimes reported": 1, // words in either order
+		"crime reported":  1,
+		"crimes zebra":    0, // every word must match
+		"zebra":           0,
+		"  crimes  ":      1,
+	} {
+		got, err := st.SearchDatasets(ctx, "", query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != want {
+			t.Errorf("search %q: %d hits, want %d", query, len(got), want)
+		}
+	}
+}

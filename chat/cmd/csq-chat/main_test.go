@@ -96,3 +96,31 @@ func TestBareModelNameIsRefused(t *testing.T) {
 		t.Errorf("bare model should be refused with guidance, got %v", err)
 	}
 }
+
+func TestHeadless_ChartIsRenderedAsPlainText(t *testing.T) {
+	newModel = func(context.Context, agent.Options) (fantasy.LanguageModel, error) {
+		return agenttest.NewFakeModel(
+			agenttest.ToolCall("c1", "present_chart", `{"sql":"SELECT socrata_id, ward FROM test.main.crimes ORDER BY socrata_id","title":"Wards",
+			 "chart_spec":{"chartType":"Bar Chart","encodings":{"x":{"field":"socrata_id"},"y":{"field":"ward"}}}}`),
+			agenttest.Text("Ward 2 is higher."),
+		), nil
+	}
+	t.Cleanup(func() { newModel = agent.NewLanguageModel })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--db", "test=" + datatest.SeedDB(t), "-m", "fake/scripted", "--session-dir", "", "--prompt", "chart"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr.String())
+	}
+	var out headlessOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Presentations) != 1 || out.Presentations[0].Kind != "chart" || len(out.Rendered) != 1 {
+		t.Fatalf("output = %+v", out)
+	}
+	r := out.Rendered[0]
+	if r.Error != "" || !strings.Contains(r.Text, "█") || strings.Contains(r.Text, "\x1b") {
+		t.Errorf("rendered = %+v", r)
+	}
+}
