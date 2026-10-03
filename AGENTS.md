@@ -103,7 +103,10 @@ Rules that hold across the boundary:
 - csq is the instrument; the model is a user of it. Anything the chat can do
   with data must stay reachable from a `csq` subcommand.
 - Tools resolve rows host-side. The model is told the shape of what was
-  shown, never the rows (`chat/internal/present`).
+  shown, not the rows, with one exception: a result of at most 10 rows and
+  60 cells also comes back as CSV, so a scalar like "how many" is read from
+  the data rather than invented (`chat/internal/present`,
+  `smallResultValues` in `chat/internal/agent/tools.go`).
 - The chat window talks to the agent only through `tui.Chat`; the agent
   package imports no terminal code.
 
