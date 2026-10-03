@@ -3,12 +3,11 @@
 package socrata
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strconv"
 	"time"
 )
 
@@ -64,65 +63,29 @@ type PageHandler func(page []Row) error
 // for stable pagination across pages per Socrata docs). whereClause, if set, is
 // passed as $where.
 func (c *Client) StreamRows(portal, datasetID, orderBy, whereClause string, limit int, handler PageHandler) error {
-	base := &url.URL{
-		Scheme: "https",
-		Host:   portal,
-		Path:   fmt.Sprintf("/resource/%s.json", datasetID),
-	}
+	return c.StreamRowsCtx(context.Background(), "https", portal, datasetID, orderBy, whereClause, "", limit, handler)
+}
 
-	fetched := 0
-	offset := 0
-	batch := c.batchSize()
-
-	for {
-		remaining := batch
-		if limit > 0 && limit-fetched < batch {
-			remaining = limit - fetched
-		}
-		if remaining <= 0 {
-			return nil
-		}
-
-		q := url.Values{}
-		q.Set("$limit", strconv.Itoa(remaining))
-		q.Set("$offset", strconv.Itoa(offset))
-		if orderBy != "" {
-			q.Set("$order", orderBy)
-		}
-		if whereClause != "" {
-			q.Set("$where", whereClause)
-		}
-		base.RawQuery = q.Encode()
-
-		page, err := c.getPage(base.String())
-		if err != nil {
-			return err
-		}
-
-		if len(page) > 0 {
-			if err := handler(page); err != nil {
-				return err
-			}
-		}
-
-		fetched += len(page)
-		offset += len(page)
-
-		if len(page) < remaining {
-			return nil // short page → end of data
-		}
-		if limit > 0 && fetched >= limit {
-			return nil
-		}
+// sleepCtx waits d or until ctx is done, whichever is first.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
-func (c *Client) getPage(fullURL string) ([]Row, error) {
+// getPage fetches one page, retrying 429/5xx/transport errors with exponential
+// backoff. Both the requests and the backoff waits honor ctx.
+func (c *Client) getPage(ctx context.Context, fullURL string) ([]Row, error) {
 	var lastErr error
 	wait := c.retryWait()
 
 	for attempt := 0; attempt <= c.maxRetries(); attempt++ {
-		req, err := http.NewRequest(http.MethodGet, fullURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
@@ -132,8 +95,13 @@ func (c *Client) getPage(fullURL string) ([]Row, error) {
 
 		resp, err := c.httpClient().Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			lastErr = err
-			time.Sleep(wait)
+			if err := sleepCtx(ctx, wait); err != nil {
+				return nil, err
+			}
 			wait *= 2
 			continue
 		}
@@ -143,6 +111,9 @@ func (c *Client) getPage(fullURL string) ([]Row, error) {
 			defer resp.Body.Close()
 			var page []Row
 			if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				return nil, fmt.Errorf("decode page: %w", err)
 			}
 			return page, nil
@@ -151,7 +122,9 @@ func (c *Client) getPage(fullURL string) ([]Row, error) {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-			time.Sleep(wait)
+			if err := sleepCtx(ctx, wait); err != nil {
+				return nil, err
+			}
 			wait *= 2
 			continue
 

@@ -39,7 +39,7 @@ func (c *Client) FetchMetadataURL(ctx context.Context, fullURL string) (*Dataset
 }
 
 // StreamRowsCtx is a context-aware, scheme-parameterised version of StreamRows.
-// Cancellation via ctx aborts between pages. selectClause, if non-empty, is sent
+// Cancellation via ctx aborts in-flight requests and backoff waits. selectClause, if non-empty, is sent
 // as $select; pass ":*,*" to include Socrata system fields (:id, :updated_at).
 func (c *Client) StreamRowsCtx(
 	ctx context.Context,
@@ -80,7 +80,7 @@ func (c *Client) StreamRowsCtx(
 		}
 		base.RawQuery = q.Encode()
 
-		page, err := c.getPage(base.String())
+		page, err := c.getPage(ctx, base.String())
 		if err != nil {
 			return err
 		}
