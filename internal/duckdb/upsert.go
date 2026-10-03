@@ -19,33 +19,7 @@ func (w *Writer) UpsertRows(schemaName string, ts TableSchema, rows []socrata.Ro
 	if ts.PrimaryKey == "" {
 		return fmt.Errorf("UpsertRows requires ts.PrimaryKey to be set")
 	}
-
-	tx, err := w.DB.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(buildUpsertSQL(schemaName, ts))
-	if err != nil {
-		return fmt.Errorf("prepare upsert: %w", err)
-	}
-	defer stmt.Close()
-
-	vals := make([]any, len(ts.Columns))
-	for rowIdx, row := range rows {
-		for i, col := range ts.Columns {
-			v, err := col.Extract(row)
-			if err != nil {
-				return fmt.Errorf("row %d col %q: %w", rowIdx, col.Name, err)
-			}
-			vals[i] = v
-		}
-		if _, err := stmt.Exec(vals...); err != nil {
-			return fmt.Errorf("upsert row %d: %w", rowIdx, err)
-		}
-	}
-	return tx.Commit()
+	return w.execRows(buildUpsertSQL(schemaName, ts), "upsert", ts, rows)
 }
 
 func buildUpsertSQL(schemaName string, ts TableSchema) string {

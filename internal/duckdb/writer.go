@@ -64,39 +64,7 @@ func (w *Writer) ReplaceTable(ts TableSchema) error {
 // InsertRows inserts a page of Socrata rows into the table described by ts,
 // inside a single transaction using a prepared statement.
 func (w *Writer) InsertRows(ts TableSchema, rows []socrata.Row) error {
-	if len(rows) == 0 {
-		return nil
-	}
-
-	tx, err := w.DB.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(ts.InsertSQL())
-	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
-	}
-	defer stmt.Close()
-
-	vals := make([]any, len(ts.Columns))
-	for rowIdx, row := range rows {
-		for i, col := range ts.Columns {
-			v, err := col.Extract(row)
-			if err != nil {
-				return fmt.Errorf("row %d col %q: %w", rowIdx, col.Name, err)
-			}
-			vals[i] = v
-		}
-		if _, err := stmt.Exec(vals...); err != nil {
-			return fmt.Errorf("insert row %d: %w", rowIdx, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
-	return nil
+	return w.execRows(ts.InsertSQL(), "insert", ts, rows)
 }
 
 // RowCount returns the count of rows currently in the target table.
@@ -108,6 +76,13 @@ func (w *Writer) RowCount(table string) (int64, error) {
 
 // InsertRowsInto inserts rows into "<schemaName>"."<ts.Table>".
 func (w *Writer) InsertRowsInto(schemaName string, ts TableSchema, rows []socrata.Row) error {
+	return w.execRows(ts.InsertSQLIn(schemaName), "insert", ts, rows)
+}
+
+// execRows runs stmtSQL once per row inside a single transaction, binding each
+// row's columns in ts order. verb names the operation in error messages.
+// Empty rows is a no-op.
+func (w *Writer) execRows(stmtSQL, verb string, ts TableSchema, rows []socrata.Row) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -117,9 +92,9 @@ func (w *Writer) InsertRowsInto(schemaName string, ts TableSchema, rows []socrat
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(ts.InsertSQLIn(schemaName))
+	stmt, err := tx.Prepare(stmtSQL)
 	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
+		return fmt.Errorf("prepare %s: %w", verb, err)
 	}
 	defer stmt.Close()
 
@@ -133,8 +108,11 @@ func (w *Writer) InsertRowsInto(schemaName string, ts TableSchema, rows []socrat
 			vals[i] = v
 		}
 		if _, err := stmt.Exec(vals...); err != nil {
-			return fmt.Errorf("insert row %d: %w", rowIdx, err)
+			return fmt.Errorf("%s row %d: %w", verb, rowIdx, err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
