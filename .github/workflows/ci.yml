@@ -3,10 +3,20 @@ name: ci
 env:
   GOLANGCI_LINT_VERSION: v2.14.0
 
+# Branch pushes get the cheap checks (test job) without needing a PR; the lint
+# job runs on PRs and main only. Docs-only pushes are skipped.
 on:
   push:
-    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
+
+# One live run per branch: a push and the PR for the same branch share a group
+# (head_ref for PRs, ref_name for pushes), and a newer commit cancels the older run.
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -42,6 +52,7 @@ jobs:
           go -C chat test -race ./...
 
   lint:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
