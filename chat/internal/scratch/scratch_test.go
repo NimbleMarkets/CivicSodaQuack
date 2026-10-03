@@ -45,7 +45,9 @@ func TestSetGetAppendDeleteListInBothScopes(t *testing.T) {
 		}
 	}
 	// Scopes are separate.
-	s.Set(Global, "only-global", "g")
+	if err := s.Set(Global, "only-global", "g"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Get(Session, "only-global", 0, 0); err == nil {
 		t.Error("a global note must not be visible in session scope")
 	}
@@ -67,7 +69,9 @@ func TestSetGetAppendDeleteListInBothScopes(t *testing.T) {
 
 func TestGetHeadAndTail(t *testing.T) {
 	s := open(t)
-	s.Set(Session, "n", "0123456789")
+	if err := s.Set(Session, "n", "0123456789"); err != nil {
+		t.Fatal(err)
+	}
 	if v, _ := s.Get(Session, "n", 3, 0); v != "012" {
 		t.Errorf("head = %q", v)
 	}
@@ -108,7 +112,9 @@ func TestLimitsSayWhatToDo(t *testing.T) {
 
 func TestAppendCountsTheCombinedSize(t *testing.T) {
 	s := open(t)
-	s.Set(Session, "n", strings.Repeat("x", 16<<10))
+	if err := s.Set(Session, "n", strings.Repeat("x", 16<<10)); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Append(Session, "n", "y"); err == nil {
 		t.Error("append past the value limit should fail")
 	}
@@ -143,7 +149,9 @@ func TestHostOwnedKeyIsReadableButNotWritableByTheModel(t *testing.T) {
 func TestSymlinkedNoteIsRefused(t *testing.T) {
 	s := open(t)
 	outside := filepath.Join(t.TempDir(), "secret")
-	os.WriteFile(outside, []byte("secret"), 0o600)
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(s.Dir, "sessions", "s1")
 	if err := os.Symlink(outside, filepath.Join(dir, "evil")); err != nil {
 		t.Skip("no symlinks:", err)
@@ -162,8 +170,12 @@ func TestSymlinkedNoteIsRefused(t *testing.T) {
 func TestResumeKeepsNotesAndGlobalIsShared(t *testing.T) {
 	dir := t.TempDir()
 	a, _ := Open(dir, "alpha")
-	a.Set(Session, "plan", "p")
-	a.Set(Global, "lesson", "l")
+	if err := a.Set(Session, "plan", "p"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Set(Global, "lesson", "l"); err != nil {
+		t.Fatal(err)
+	}
 	a.Close()
 
 	again, _ := Open(dir, "alpha")
@@ -196,9 +208,15 @@ func TestBriefListsKeysNotContents(t *testing.T) {
 	if s.Brief() != "" {
 		t.Errorf("empty pads have no brief: %q", s.Brief())
 	}
-	s.HostSet(KeyLatestRequest, "hello")
-	s.Set(Session, "plan", "SECRET-CONTENT")
-	s.Set(Global, "chicago.crimes", "x")
+	if err := s.HostSet(KeyLatestRequest, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set(Session, "plan", "SECRET-CONTENT"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set(Global, "chicago.crimes", "x"); err != nil {
+		t.Fatal(err)
+	}
 	b := s.Brief()
 	if !strings.Contains(b, "global notes: chicago.crimes (1 B)") || !strings.Contains(b, "session notes: plan") {
 		t.Errorf("brief = %q", b)
