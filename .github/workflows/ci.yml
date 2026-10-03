@@ -1,7 +1,7 @@
 name: ci
 
 env:
-  GOLANGCI_LINT_VERSION: v2.10.1
+  GOLANGCI_LINT_VERSION: v2.14.0
 
 on:
   push:
@@ -48,8 +48,17 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Same toolchain as the test job: chat/ needs Go 1.27. Requires
+          # golangci-lint >= v2.14 (v2.10 cannot read Go 1.27's stdlib).
+          go-version-file: chat/go.mod
 
       - uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: golangci-lint (chat module)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: chat
+          args: --config ../.golangci.yml
