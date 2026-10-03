@@ -1,0 +1,3 @@
+COPA complaints (mft5-nfa8): complaint_date is the date the case was CLOSED, so use it for resolution times.
+The data is complete through 2026-12-31 and every year is directly comparable.
+Counts per year are around 12,000.

@@ -1,0 +1,14 @@
+portal: data.cityofchicago.org
+db: .csq/chicago.duckdb
+concurrency: 2
+on_error: continue
+
+defaults:
+  batch_size: 5000
+  order_by: ":id"
+
+include:
+  - id: z8bn-74gv   # Police Stations
+  - id: 28km-gtjn   # Fire Stations
+  - id: mft5-nfa8   # COPA Cases - Summary
+  - id: gumc-mgzr   # Violence Reduction - Victims of Homicides and Non-Fatal Shootings

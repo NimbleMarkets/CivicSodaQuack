@@ -119,6 +119,12 @@ internal/session/   JSONL recorder
 internal/tui/       Bubble Tea window
 ```
 
+## The notes exercise
+
+`exercise/` is a reproducible protocol for watching how a model uses the
+scratchpad on real data, with scripts, ground truth, and a prompt for an agent
+session that operates a model. See `exercise/README.md`.
+
 ## Develop
 
 ```sh
