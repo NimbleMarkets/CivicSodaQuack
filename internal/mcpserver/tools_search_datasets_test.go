@@ -77,3 +77,29 @@ func ids(in []DatasetSummary) []string {
 	sort.Strings(out)
 	return out
 }
+
+func TestSearch_MultiWordEveryWordMustMatch(t *testing.T) {
+	pools, cleanup := openFixturePools(t,
+		FixtureDataset{ID: "aaaa-0001", Name: "COPA Cases", Description: "Citizen complaints against officers"},
+		FixtureDataset{ID: "bbbb-0002", Name: "COPA Budget", Description: "Spending", Tags: []string{"Finance"}},
+		FixtureDataset{ID: "cccc-0003", Name: "Park Events", Description: "complaints about noise"})
+	defer cleanup()
+
+	cases := map[string][]string{
+		"copa complaints": {"aaaa-0001"}, // words match in different fields
+		"COPA   finance":  {"bbbb-0002"}, // case-insensitive, tag word, extra spaces
+		"copa":            {"aaaa-0001", "bbbb-0002"},
+		"copa parks":      {}, // one word misses everywhere
+	}
+	for q, want := range cases {
+		got, err := SearchDatasets(context.Background(), pools, SearchDatasetsArgs{Query: q})
+		if err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		g := ids(got)
+		sort.Strings(g)
+		if strings.Join(g, ",") != strings.Join(want, ",") {
+			t.Errorf("%q: got %v, want %v", q, g, want)
+		}
+	}
+}

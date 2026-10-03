@@ -4,6 +4,7 @@ package mcpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -11,27 +12,48 @@ import (
 
 // SearchDatasetsArgs are the inputs to search_datasets.
 type SearchDatasetsArgs struct {
-	Query  string `json:"query" jsonschema:"substring to match against name and description; also matches tags case-insensitively"`
+	Query  string `json:"query" jsonschema:"words to find; every word must appear (case-insensitive) in the name or description, or equal a tag"`
 	Portal string `json:"portal,omitempty" jsonschema:"optional portal alias filter"`
 }
 
-// SearchDatasets returns datasets whose name or description contain the
-// query (case-insensitive substring) or whose tag list contains the query
-// (case-insensitive exact match).
+// SearchDatasets returns datasets matching every whitespace-separated word of
+// the query. A word matches when it is a case-insensitive substring of the
+// name or description, or case-insensitively equals one of the tags. Words may
+// match in different fields, so "copa complaints" finds a dataset named
+// "COPA Cases" whose description mentions complaints. This is the single
+// search policy for csq and the chat; adapters pass the query through.
 func SearchDatasets(ctx context.Context, p *Pools, args SearchDatasetsArgs) ([]DatasetSummary, error) {
-	if strings.TrimSpace(args.Query) == "" {
+	words := strings.Fields(strings.ToLower(args.Query))
+	if len(words) == 0 {
 		return nil, fmt.Errorf("query must not be empty")
 	}
 	all, err := ListDatasets(ctx, p, ListDatasetsArgs{Portal: args.Portal})
 	if err != nil {
 		return nil, err
 	}
-	needle := strings.ToLower(args.Query)
+
+	// One catalog read per portal, not one per dataset.
+	byPortal := map[string]map[string]searchRow{}
+	for _, alias := range selectPortals(p, args.Portal) {
+		m, err := loadSearchable(ctx, p.Portals[alias].DB)
+		if err != nil {
+			return nil, fmt.Errorf("search %s: %w", alias, err)
+		}
+		byPortal[alias] = m
+	}
+
 	out := make([]DatasetSummary, 0, len(all))
 	for _, d := range all {
-		matched := strings.Contains(strings.ToLower(d.Name), needle)
-		if !matched {
-			matched = matchesDescriptionOrTag(ctx, p, d, needle)
+		meta, ok := byPortal[d.Portal][d.DatasetID]
+		if !ok {
+			continue
+		}
+		matched := true
+		for _, w := range words {
+			if !strings.Contains(meta.text, w) && !meta.tags[w] {
+				matched = false
+				break
+			}
 		}
 		if matched {
 			out = append(out, d)
@@ -40,35 +62,41 @@ func SearchDatasets(ctx context.Context, p *Pools, args SearchDatasetsArgs) ([]D
 	return out, nil
 }
 
-// matchesDescriptionOrTag fetches the catalog row's description and tags and
-// applies the search rule. Pulled out so the listDatasets path stays cheap.
-func matchesDescriptionOrTag(ctx context.Context, p *Pools, d DatasetSummary, needle string) bool {
-	pool := p.Portals[d.Portal].DB
-	var description string
-	var tagsRaw any
-	err := pool.QueryRowContext(ctx,
-		`SELECT COALESCE(description, ''), tags
-		 FROM _csq.catalog WHERE id = $1`, d.DatasetID).Scan(&description, &tagsRaw)
+type searchRow struct {
+	text string
+	tags map[string]bool
+}
+
+// loadSearchable reads id, name, description and tags for every catalog row in
+// one query.
+func loadSearchable(ctx context.Context, db *sql.DB) (map[string]searchRow, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, COALESCE(name, ''), COALESCE(description, ''), tags FROM _csq.catalog`)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	if strings.Contains(strings.ToLower(description), needle) {
-		return true
-	}
-	// DuckDB returns JSON columns as native Go values; re-marshal to a string
-	// then unmarshal as []string. See project_duckdb_json_scan.md.
-	if tagsRaw != nil {
-		b, err := json.Marshal(tagsRaw)
-		if err == nil {
-			var tags []string
-			if json.Unmarshal(b, &tags) == nil {
-				for _, t := range tags {
-					if strings.EqualFold(t, needle) {
-						return true
+	defer rows.Close()
+	out := map[string]searchRow{}
+	for rows.Next() {
+		var id, name, description string
+		var tagsRaw any
+		if err := rows.Scan(&id, &name, &description, &tagsRaw); err != nil {
+			return nil, err
+		}
+		r := searchRow{text: strings.ToLower(name + "\n" + description), tags: map[string]bool{}}
+		// DuckDB returns JSON columns as native Go values; re-marshal to a string
+		// then unmarshal as []string. See project_duckdb_json_scan.md.
+		if tagsRaw != nil {
+			if b, err := json.Marshal(tagsRaw); err == nil {
+				var tags []string
+				if json.Unmarshal(b, &tags) == nil {
+					for _, t := range tags {
+						r.tags[strings.ToLower(t)] = true
 					}
 				}
 			}
 		}
+		out[id] = r
 	}
-	return false
+	return out, rows.Err()
 }
