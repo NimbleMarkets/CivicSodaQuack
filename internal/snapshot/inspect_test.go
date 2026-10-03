@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
 )
 
 func openFixtureDB(t *testing.T, datasets ...FixtureDataset) (*sql.DB, string) {
@@ -25,7 +27,7 @@ func openFixtureDB(t *testing.T, datasets ...FixtureDataset) (*sql.DB, string) {
 func TestAssertIsCSQDB_Valid(t *testing.T) {
 	db, path := openFixtureDB(t,
 		FixtureDataset{ID: "aaaa-0001", Name: "X"})
-	if err := assertIsCSQDB(db, path); err != nil {
+	if err := duckdb.AssertCSQ(db, path); err != nil {
 		t.Errorf("want nil err, got %v", err)
 	}
 }
@@ -41,7 +43,7 @@ func TestAssertIsCSQDB_Invalid(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE foo (x INT)`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	err = assertIsCSQDB(db, path)
+	err = duckdb.AssertCSQ(db, path)
 	if err == nil || !strings.Contains(err.Error(), "not a CivicSodaQuack DuckDB") {
 		t.Errorf("got %v", err)
 	}

@@ -83,7 +83,7 @@ func findDatasetPortals(ctx context.Context, p *Pools, id, portal string) ([]str
 		return nil, nil
 	}
 	var out []string
-	for _, alias := range sortedPortals(p) {
+	for _, alias := range selectPortals(p, "") {
 		exists, err := datasetExists(ctx, p.Portals[alias].DB, id)
 		if err != nil {
 			return nil, err
@@ -99,20 +99,6 @@ func datasetExists(ctx context.Context, db *sql.DB, id string) (bool, error) {
 	var n int
 	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM _csq.catalog WHERE id = $1`, id).Scan(&n)
 	return n > 0, err
-}
-
-func sortedPortals(p *Pools) []string {
-	out := make([]string, 0, len(p.Portals))
-	for a := range p.Portals {
-		out = append(out, a)
-	}
-	// stable order
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1] > out[j]; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-		}
-	}
-	return out
 }
 
 // loadDetail builds the full DatasetDetail for one (alias, id) pair.

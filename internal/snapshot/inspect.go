@@ -10,21 +10,6 @@ import (
 	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
 )
 
-// assertIsCSQDB returns nil if db has a _csq.catalog table.
-func assertIsCSQDB(db *sql.DB, path string) error {
-	var n int
-	err := db.QueryRow(
-		`SELECT COUNT(*) FROM information_schema.tables
-		 WHERE table_schema = '_csq' AND table_name = 'catalog'`).Scan(&n)
-	if err != nil {
-		return fmt.Errorf("inspect %s: %w", path, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("not a CivicSodaQuack DuckDB (no _csq.catalog in %s)", path)
-	}
-	return nil
-}
-
 // countDatasets returns the count of rows in _csq.catalog.
 func countDatasets(db *sql.DB) (int64, error) {
 	var n int64

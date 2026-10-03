@@ -17,6 +17,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
+
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
@@ -73,7 +75,7 @@ func Pack(ctx context.Context, opts ProducerOptions) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open temp db: %w", err)
 	}
-	if err := assertIsCSQDB(tmpDB, opts.DBPath); err != nil {
+	if err := duckdb.AssertCSQ(tmpDB, opts.DBPath); err != nil {
 		tmpDB.Close()
 		return nil, err
 	}
