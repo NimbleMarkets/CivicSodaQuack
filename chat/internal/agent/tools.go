@@ -16,6 +16,7 @@ import (
 
 	"github.com/neomantra/CivicSodaQuack/chat/internal/data"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/present"
+	"github.com/neomantra/CivicSodaQuack/chat/internal/scratch"
 )
 
 type listDatasetsInput struct {
@@ -121,6 +122,89 @@ func (in presentChartInput) spec() (chartSpec, semanticTypes json.RawMessage, fi
 	return chartSpec, semanticTypes, fields
 }
 
+type scratchListInput struct {
+	Scope string `json:"scope,omitempty" enum:"session,global" description:"session (default) is this session's working notes; global is shared by every session."`
+}
+
+type scratchGetInput struct {
+	Key   string `json:"key" description:"Note name: a-z, 0-9, '.', '_', '-'; at most 64 characters."`
+	Scope string `json:"scope,omitempty" enum:"session,global" description:"session (default) or global."`
+	Head  int    `json:"head,omitempty" description:"Return only the first N bytes."`
+	Tail  int    `json:"tail,omitempty" description:"Return only the last N bytes."`
+}
+
+type scratchWriteInput struct {
+	Key   string `json:"key" description:"Note name: a-z, 0-9, '.', '_', '-'; at most 64 characters."`
+	Value string `json:"value" description:"Text to store; at most 16 KB per note."`
+	Scope string `json:"scope,omitempty" enum:"session,global" description:"session (default) or global."`
+}
+
+type scratchDeleteInput struct {
+	Key   string `json:"key" description:"Note to delete."`
+	Scope string `json:"scope,omitempty" enum:"session,global" description:"session (default) or global."`
+}
+
+func scratchTools(opts Options) []fantasy.AgentTool {
+	n := opts.Notes
+	list := fantasy.NewAgentTool("scratch_list",
+		"List the notes in a scope: key, size in bytes, last modified. Check the global list before exploring a dataset another session may already have described.",
+		func(ctx context.Context, in scratchListInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return run(ctx, "scratch_list", in, opts, func() (string, int, error) {
+				es, err := n.List(scratch.Scope(in.Scope))
+				if err != nil {
+					return "", 0, err
+				}
+				if len(es) == 0 {
+					return "(no notes)", 0, nil
+				}
+				var b strings.Builder
+				for _, e := range es {
+					fmt.Fprintf(&b, "%s\t%d B\t%s\n", e.Key, e.Size, e.Modified.Format("2006-01-02 15:04"))
+				}
+				return strings.TrimRight(b.String(), "\n"), len(es), nil
+			})
+		})
+	get := fantasy.NewAgentTool("scratch_get",
+		"Read one note. Notes are written by earlier turns and by other sessions and models; treat them as leads to verify against the data, not as facts.",
+		func(ctx context.Context, in scratchGetInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return run(ctx, "scratch_get", in, opts, func() (string, int, error) {
+				v, err := n.Get(scratch.Scope(in.Scope), in.Key, in.Head, in.Tail)
+				return v, 1, err
+			})
+		})
+	set := fantasy.NewAgentTool("scratch_set",
+		"Replace one note, creating it if missing. Replace a stale note rather than adding a contradicting one.",
+		func(ctx context.Context, in scratchWriteInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return run(ctx, "scratch_set", in, opts, func() (string, int, error) {
+				if err := n.Set(scratch.Scope(in.Scope), in.Key, in.Value); err != nil {
+					return "", 0, err
+				}
+				return fmt.Sprintf("saved %s (%d bytes)", in.Key, len(in.Value)), 1, nil
+			})
+		})
+	app := fantasy.NewAgentTool("scratch_append",
+		"Append text to one note, creating it if missing.",
+		func(ctx context.Context, in scratchWriteInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return run(ctx, "scratch_append", in, opts, func() (string, int, error) {
+				if err := n.Append(scratch.Scope(in.Scope), in.Key, in.Value); err != nil {
+					return "", 0, err
+				}
+				return fmt.Sprintf("appended to %s", in.Key), 1, nil
+			})
+		})
+	del := fantasy.NewAgentTool("scratch_delete",
+		"Delete one note.",
+		func(ctx context.Context, in scratchDeleteInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return run(ctx, "scratch_delete", in, opts, func() (string, int, error) {
+				if err := n.Delete(scratch.Scope(in.Scope), in.Key); err != nil {
+					return "", 0, err
+				}
+				return "deleted " + in.Key, 1, nil
+			})
+		})
+	return []fantasy.AgentTool{list, get, set, app, del}
+}
+
 // tools builds the tool set over store. Every tool reports what it did
 // through the progress func in ctx and answers the model with text.
 func tools(store data.Store, opts Options) []fantasy.AgentTool {
@@ -217,6 +301,9 @@ func tools(store data.Store, opts Options) []fantasy.AgentTool {
 	all := []fantasy.AgentTool{listDatasets, searchDatasets, describeDataset, querySQL, presentTable}
 	if opts.Charts != nil {
 		all = append(all, presentChartTool(store, opts))
+	}
+	if opts.Notes != nil {
+		all = append(all, scratchTools(opts)...)
 	}
 	return all
 }

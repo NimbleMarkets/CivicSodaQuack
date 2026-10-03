@@ -32,6 +32,7 @@ import (
 	"github.com/neomantra/CivicSodaQuack/chat/internal/chart"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/data"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/present"
+	"github.com/neomantra/CivicSodaQuack/chat/internal/scratch"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/session"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/tui"
 )
@@ -58,6 +59,8 @@ type options struct {
 	apiKey     string
 	prompt     string
 	sessionDir string
+	session    string
+	scratchDir string
 	logFile    string
 	timeout    time.Duration
 	maxSteps   int
@@ -90,6 +93,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.apiKey, "api-key", envOr("CSQ_CHAT_API_KEY", ""), "API key; overrides the vendor's environment variable")
 	fs.StringVarP(&o.prompt, "prompt", "p", "", "run one turn headless and print the result")
 	fs.StringVar(&o.sessionDir, "session-dir", envOr("CSQ_CHAT_SESSION_DIR", defaultSessionDir()), "where to write session JSONL files; empty disables")
+	fs.StringVar(&o.session, "session", envOr("CSQ_CHAT_SESSION", ""), "session name; reuse one to resume its session notes (default: a fresh name)")
+	fs.StringVar(&o.scratchDir, "scratch-dir", envOr("CSQ_CHAT_SCRATCH_DIR", scratch.DefaultDir()), "where the model's notes live; empty disables the scratchpad")
 	fs.StringVar(&o.logFile, "log-file", envOr("CSQ_CHAT_LOG", ""), "append logs here (the TUI owns the terminal); empty means stderr in headless mode, discarded in the TUI")
 	fs.DurationVar(&o.timeout, "timeout", 2*time.Minute, "per-turn timeout")
 	fs.IntVar(&o.maxSteps, "max-steps", 12, "model calls allowed per turn")
@@ -132,6 +137,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	defer store.Close()
 
+	if o.session == "" {
+		o.session = session.NewID()
+	}
+	var notes *scratch.Scratch
+	if o.scratchDir != "" {
+		notes, err = scratch.Open(o.scratchDir, o.session)
+		if err != nil {
+			return err
+		}
+		defer notes.Close()
+	}
+
 	charts, err := chart.New(ctx)
 	if err != nil {
 		return err
@@ -140,6 +157,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	opts := agent.Options{
 		Charts: charts,
+		Notes:  notes,
 		Model:  o.model, BaseURL: o.baseURL, APIKey: o.apiKey,
 		Timeout: o.timeout, MaxSteps: o.maxSteps, MaxOutputTokens: o.maxOutput, MaxHistory: o.maxHistory,
 	}
@@ -149,7 +167,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	runner := agent.New(model, store, opts)
 
-	rec, err := session.Open(o.sessionDir)
+	rec, err := session.Open(o.sessionDir, o.session)
 	if err != nil {
 		return err
 	}

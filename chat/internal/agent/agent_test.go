@@ -186,7 +186,7 @@ func TestParseModel(t *testing.T) {
 func TestSystemPrompt_NamesPortals(t *testing.T) {
 	r := New(agenttest.NewFakeModel(), seedStore(t), Options{})
 	_ = r
-	got := systemPrompt([]string{"chicago", "nyc"}, testDate(), false)
+	got := systemPrompt([]string{"chicago", "nyc"}, testDate(), false, "off")
 	if !strings.Contains(got, "Attached portals: chicago, nyc") || !strings.Contains(got, "Today is 2026-09-30") {
 		t.Errorf("prompt: %q", got[:200])
 	}
@@ -221,8 +221,8 @@ func TestAsk_EmptyReplyAfterTablePointsAtIt(t *testing.T) {
 }
 
 func TestSystemPrompt_ChartsOnlyWhenARendererExists(t *testing.T) {
-	without := systemPrompt([]string{"a"}, testDate(), false)
-	with := systemPrompt([]string{"a"}, testDate(), true)
+	without := systemPrompt([]string{"a"}, testDate(), false, "off")
+	with := systemPrompt([]string{"a"}, testDate(), true, "off")
 	if strings.Contains(without, "present_chart") || strings.Contains(without, "## Charts") || strings.Contains(without, "{{") {
 		t.Errorf("prompt without charts mentions them or has unfilled placeholders:\n%s", without)
 	}

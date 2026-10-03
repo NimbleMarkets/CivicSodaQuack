@@ -76,6 +76,26 @@ here and shown to you; the model is told only the shape, so a large result
 costs it nothing. SQL runs read-only with DuckDB external access disabled, so
 the model cannot write, read local files, or fetch URLs.
 
+## Notes (the scratchpad)
+
+The model keeps small text notes in two scopes, under `--scratch-dir`
+(default `~/.csq/scratch`; empty disables):
+
+- **session** notes (`sessions/<name>/`) are its plan, findings and open
+  questions. `--session NAME` resumes them; without it a fresh name is used.
+  The host writes the person's latest message to the read-only note
+  `latest-request`, so the model can recover it after history is trimmed.
+- **global** notes (`global/`) are shared by every session and every model.
+  They are where the model records what it learns about the data.
+
+One file per key (`a-z 0-9 . _ -`, 64 characters), 16 KB per note, 32 notes /
+128 KB per session pad and 128 notes / 512 KB for global. Tools: `scratch_list`,
+`scratch_get`, `scratch_set`, `scratch_append`, `scratch_delete`, each with an
+optional `scope`. A session that starts with notes present is told their keys
+and sizes, never their contents. Notes are written by models, so they are leads
+to verify, not facts; nothing in them feeds csq's own arithmetic. The store is
+adapted from ds4go's `scratchtool`.
+
 ## Session files
 
 Each run appends one JSON object per line to
@@ -94,6 +114,7 @@ cmd/csq-chat/       the binary; --prompt is the headless path
 internal/present/   what a tool can push to the screen, and the summary the model sees
 internal/data/      csq databases behind one interface (datatest/ seeds fixtures)
 internal/agent/     Fantasy runner, tools, system prompt (agenttest/ has a scripted model)
+internal/scratch/   the model's notes, session and global scope
 internal/session/   JSONL recorder
 internal/tui/       Bubble Tea window
 ```
@@ -114,6 +135,6 @@ database. The binary's own test runs the headless path through both.
 
 Raster charts (flint-ntcharts v0.3.0 can draw more chart types as images over
 Kitty graphics; this build uses the text renderer only), 3D, maps, document
-viewers, a scratchpad,
+viewers,
 a knowledge base, syncing from inside the chat, embedded models, and the
 browser build.

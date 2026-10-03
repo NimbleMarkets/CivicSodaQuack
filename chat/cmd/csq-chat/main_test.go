@@ -33,7 +33,7 @@ func TestHeadless_PrintsReplyAndPresentationsAndRecordsSession(t *testing.T) {
 	err := run([]string{
 		"--db", "test=" + datatest.SeedDB(t),
 		"-m", "fake/scripted",
-		"--session-dir", sessions,
+		"--session-dir", sessions, "--scratch-dir", t.TempDir(),
 		"--prompt", "amount by ward",
 	}, &stdout, &stderr)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestFlags_RequireDBAndModel(t *testing.T) {
 
 func TestBareModelNameIsRefused(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := run([]string{"--db", datatest.SeedDB(t), "-m", "Qwen3-0.6B", "--session-dir", "", "--prompt", "hi"}, &stdout, &stderr)
+	err := run([]string{"--db", datatest.SeedDB(t), "-m", "Qwen3-0.6B", "--session-dir", "", "--scratch-dir", "", "--prompt", "hi"}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "vendor prefix") {
 		t.Errorf("bare model should be refused with guidance, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestHeadless_ChartIsRenderedAsPlainText(t *testing.T) {
 	t.Cleanup(func() { newModel = agent.NewLanguageModel })
 
 	var stdout, stderr bytes.Buffer
-	err := run([]string{"--db", "test=" + datatest.SeedDB(t), "-m", "fake/scripted", "--session-dir", "", "--prompt", "chart"}, &stdout, &stderr)
+	err := run([]string{"--db", "test=" + datatest.SeedDB(t), "-m", "fake/scripted", "--session-dir", "", "--scratch-dir", "", "--prompt", "chart"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, stderr.String())
 	}
@@ -124,3 +124,55 @@ func TestHeadless_ChartIsRenderedAsPlainText(t *testing.T) {
 		t.Errorf("rendered = %+v", r)
 	}
 }
+
+func TestHeadless_NotesPersistAndResumeBySessionName(t *testing.T) {
+	scratchDir := t.TempDir()
+	db := datatest.SeedDB(t)
+	args := func(prompt string) []string {
+		return []string{"--db", "test=" + db, "-m", "fake/scripted", "--session-dir", "", "--scratch-dir", scratchDir, "--session", "study", "--prompt", prompt}
+	}
+
+	newModel = func(context.Context, agent.Options) (fantasy.LanguageModel, error) {
+		return agenttest.NewFakeModel(
+			agenttest.ToolCall("c1", "scratch_set", `{"key":"plan","value":"check the ward column"}`),
+			agenttest.ToolCall("c2", "scratch_set", `{"key":"crimes.ward","value":"ward is a code, never sum it","scope":"global"}`),
+			agenttest.Text("saved"),
+		), nil
+	}
+	t.Cleanup(func() { newModel = agent.NewLanguageModel })
+	var out, errb bytes.Buffer
+	if err := run(args("first"), &out, &errb); err != nil {
+		t.Fatalf("first run: %v\n%s", err, errb.String())
+	}
+
+	// A second run with the same session name sees both notes in its prompt.
+	var prompt string
+	newModel = func(context.Context, agent.Options) (fantasy.LanguageModel, error) {
+		m := agenttest.NewFakeModel(agenttest.Text("hello again"))
+		capture = m
+		return m, nil
+	}
+	out.Reset()
+	if err := run(args("second"), &out, &errb); err != nil {
+		t.Fatalf("second run: %v\n%s", err, errb.String())
+	}
+	for _, m := range capture.Calls[0].Prompt {
+		if m.Role == fantasy.MessageRoleSystem {
+			for _, part := range m.Content {
+				if tp, ok := part.(fantasy.TextPart); ok {
+					prompt += tp.Text
+				}
+			}
+		}
+	}
+	for _, want := range []string{"Notes present at the start of this session", "session notes: plan", "global notes: crimes.ward"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("resumed prompt lacks %q", want)
+		}
+	}
+	if strings.Contains(prompt, "never sum it") {
+		t.Error("the prompt must list note keys, not contents")
+	}
+}
+
+var capture *agenttest.FakeModel

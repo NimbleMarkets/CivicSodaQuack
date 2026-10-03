@@ -21,6 +21,7 @@ import (
 
 	"github.com/neomantra/CivicSodaQuack/chat/internal/data"
 	"github.com/neomantra/CivicSodaQuack/chat/internal/present"
+	"github.com/neomantra/CivicSodaQuack/chat/internal/scratch"
 )
 
 //go:embed system_prompt.md
@@ -39,6 +40,10 @@ type Options struct {
 	MaxToolBytes    int           // per tool result sent to the model, default 24000
 	PresentRowCap   int           // rows pushed to the screen per table, default 500
 	Timeout         time.Duration // per turn, default 2m
+
+	// Notes is the model's scratchpad. When nil the scratch tools are not
+	// offered.
+	Notes *scratch.Scratch
 
 	// Charts checks chart specs before they are shown. When nil the
 	// present_chart tool is not offered to the model at all.
@@ -145,7 +150,7 @@ func New(model fantasy.LanguageModel, store data.Store, opts Options) *Runner {
 	opts = opts.withDefaults()
 	r := &Runner{model: model, store: store, opts: opts}
 	r.agent = fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(systemPrompt(store.Portals(), time.Now(), opts.Charts != nil)),
+		fantasy.WithSystemPrompt(systemPrompt(store.Portals(), time.Now(), opts.Charts != nil, notesArg(opts))),
 		fantasy.WithTools(tools(store, opts)...),
 		fantasy.WithStopConditions(fantasy.StepCountIs(opts.MaxSteps)),
 		fantasy.WithMaxOutputTokens(opts.MaxOutputTokens),
@@ -177,7 +182,20 @@ const chartGuidance = `## Charts
 
 `
 
-func systemPrompt(portals []string, now time.Time, charts bool) string {
+const notesToolLine = "- `scratch_list`, `scratch_get`, `scratch_set`, `scratch_append`, `scratch_delete` read and write your notes (see Notes below).\n"
+
+const notesGuidance = `## Notes
+
+You have a scratchpad that outlives a turn: session notes for this conversation's working memory, global notes shared by every session and every model.
+
+- Session notes: keep your plan, findings so far, and open questions, and update them as you go. The person's latest message is always in the read-only note ` + "`latest-request`" + `; read it if you lose track of what was asked.
+- Global notes: before exploring a dataset, list them. Record what you learn about the data that would save the next reader time, and replace a note that turns out to be wrong rather than adding a contradiction.
+- Notes are written by models, including earlier you. Treat them as leads to check against the data, not as facts, and say so when you rely on one.
+- A note is at most 16 KB; keep them short and specific. Do not store secrets or whole result sets.
+{{notes_brief}}
+`
+
+func systemPrompt(portals []string, now time.Time, charts bool, notes string) string {
 	list := strings.Join(portals, ", ")
 	if list == "" {
 		list = "(none)"
@@ -189,7 +207,31 @@ func systemPrompt(portals []string, now time.Time, charts bool) string {
 	}
 	s = strings.ReplaceAll(s, "{{chart_tool}}", tool)
 	s = strings.ReplaceAll(s, "{{chart_guidance}}", guidance)
+	return notesSection(s, notes, now)
+}
+
+func notesSection(s, notes string, now time.Time) string {
+	if notes == "off" {
+		s = strings.ReplaceAll(s, "{{notes_guidance}}", "")
+		s = strings.ReplaceAll(s, "{{notes_tool}}", "")
+	} else {
+		s = strings.ReplaceAll(s, "{{notes_tool}}", notesToolLine)
+		brief := ""
+		if notes != "" {
+			brief = "\nNotes present at the start of this session:\n" + notes
+		}
+		s = strings.ReplaceAll(s, "{{notes_guidance}}", strings.ReplaceAll(notesGuidance, "{{notes_brief}}", brief))
+	}
 	return strings.TrimSpace(s) + "\n\nToday is " + now.UTC().Format("2006-01-02") + "."
+}
+
+// notesArg is the notes argument to systemPrompt: "off" without a
+// scratchpad, otherwise the brief of what it already holds.
+func notesArg(opts Options) string {
+	if opts.Notes == nil {
+		return "off"
+	}
+	return opts.Notes.Brief()
 }
 
 // Model reports the vendor and model in use.
@@ -219,6 +261,13 @@ func (r *Runner) Ask(ctx context.Context, prompt string, progress ProgressFunc, 
 		defer cancel()
 	}
 
+	if r.opts.Notes != nil {
+		// The history is bounded, so the request that started this turn is
+		// kept where the model can always read it, and it cannot rewrite it.
+		if err := r.opts.Notes.HostSet(scratch.KeyLatestRequest, truncateText(prompt, 8000)); err != nil {
+			emit(ctx, Event{Kind: EventProgress, Message: "could not record latest-request: " + err.Error()})
+		}
+	}
 	r.mu.Lock()
 	r.turn++
 	history := append([]fantasy.Message(nil), r.history...)

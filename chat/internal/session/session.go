@@ -76,18 +76,26 @@ type Recorder struct {
 	path string
 }
 
-// Open creates <dir>/<timestamp>-<id>.jsonl. An empty dir disables
-// recording and returns nil.
-func Open(dir string) (*Recorder, error) {
+// NewID returns a fresh session name: a timestamp and the process id.
+func NewID() string {
+	return fmt.Sprintf("%s-%d", time.Now().UTC().Format("20060102t150405"), os.Getpid())
+}
+
+// Open creates <dir>/<timestamp>-<id>.jsonl for the named session; an empty
+// id gets a fresh one. Resuming a session name starts a new file, so one
+// session can span several. An empty dir disables recording and returns nil.
+func Open(dir, id string) (*Recorder, error) {
 	if dir == "" {
 		return nil, nil
+	}
+	if id == "" {
+		id = NewID()
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("session dir: %w", err)
 	}
-	now := time.Now().UTC()
-	id := fmt.Sprintf("%s-%d", now.Format("20060102T150405"), os.Getpid())
-	path := filepath.Join(dir, id+".jsonl")
+	stamp := time.Now().UTC().Format("20060102T150405")
+	path := filepath.Join(dir, stamp+"-"+id+".jsonl")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("session file: %w", err)

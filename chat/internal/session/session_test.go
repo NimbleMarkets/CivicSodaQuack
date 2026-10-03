@@ -35,7 +35,7 @@ func readAll(t *testing.T, path string) []Record {
 }
 
 func TestRecorder_WritesOneLinePerEventWithoutRows(t *testing.T) {
-	rec, err := Open(t.TempDir())
+	rec, err := Open(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +95,8 @@ func TestRecorder_NilIsSafe(t *testing.T) {
 	if rec.Path() != "" || rec.Close() != nil {
 		t.Error("nil recorder should be inert")
 	}
-	if r, err := Open(""); r != nil || err != nil {
-		t.Errorf("Open(\"\") = %v, %v", r, err)
+	if r, err := Open("", ""); r != nil || err != nil {
+		t.Errorf("Open(\"\", \"\") = %v, %v", r, err)
 	}
 }
 
@@ -107,4 +107,27 @@ func containsAny(s string, subs ...string) bool {
 		}
 	}
 	return false
+}
+
+func TestOpen_NamedSessionCanBeResumedIntoANewFile(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Open(dir, "chicago-study")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Start("m", nil)
+	a.Close()
+	time.Sleep(1100 * time.Millisecond) // file names carry whole seconds
+	b, err := Open(dir, "chicago-study")
+	if err != nil {
+		t.Fatalf("resuming a session name must not collide with its earlier file: %v", err)
+	}
+	b.Start("m", nil)
+	b.Close()
+	if a.Path() == b.Path() {
+		t.Error("expected a new file per run")
+	}
+	if got := readAll(t, b.Path()); got[0].Session != "chicago-study" {
+		t.Errorf("session id = %q", got[0].Session)
+	}
 }
