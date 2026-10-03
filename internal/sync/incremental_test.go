@@ -165,7 +165,6 @@ func TestIncremental_DeltaUpdate(t *testing.T) {
 		ID: "aaaa-0001", Name: "Ds aaaa-0001",
 		Columns: ds1.Columns,
 		Rows: []map[string]any{
-			{":id": "aaaa-0001-0", ":updated_at": "2026-04-22T00:00:00.000", "score": float64(0)},
 			{":id": "aaaa-0001-0", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(999)},
 		},
 	}
@@ -433,5 +432,46 @@ func TestIncremental_DeltaCheckpoints_FinalWriteSubsumes(t *testing.T) {
 	want := time.Date(2026, 4, 23, 0, 0, 4, 0, time.UTC)
 	if !state2.HWMUpdatedAt.Equal(want) {
 		t.Errorf("HWM after success: got %v, want %v", state2.HWMUpdatedAt, want)
+	}
+}
+
+// With the config default order_by (":id"), an early :id carrying a newer
+// timestamp must not advance the checkpoint past later :ids with older ones.
+func TestIncremental_DeltaResumesPastOutOfOrderIDs(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	bootstrap := mkIncrDataset("aaaa-0001", 1, "2026-04-22")
+	if res := runIncr(t, bootstrap, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+
+	rows := []map[string]any{
+		{":id": "a", ":updated_at": "2026-04-25T00:00:00.000", "score": float64(1)},
+		{":id": "b", ":updated_at": "2026-04-23T00:00:00.000", "score": float64(2)},
+		{":id": "c", ":updated_at": "2026-04-24T00:00:00.000", "score": float64(3)},
+	}
+	sync := func(runID string, failAt int) DatasetResult {
+		ds := fakeDataset{ID: "aaaa-0001", Name: "Ds", Columns: bootstrap.Columns, Rows: rows, FailAtOffset: failAt}
+		srv := newFakeSocrata(t, ds)
+		client := &socrata.Client{BatchSize: 1, MaxRetries: 1, RetryWait: time.Millisecond}
+		strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: runID}
+		target := DatasetTarget{ID: ds.ID, Effective: config.Effective{
+			DatasetID: ds.ID, Table: "crimes", BatchSize: 1, OrderBy: ":id", CheckpointEveryNPages: 1,
+		}}
+		res, _ := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+		return res
+	}
+
+	if res := sync("run2", 1); res.Status != "failed" {
+		t.Fatalf("interrupted run: status %q, want failed", res.Status)
+	}
+	if res := sync("run3", 0); res.Status != "ok" {
+		t.Fatalf("resume: %v", res.Err)
+	}
+	var n int
+	_ = w.DB.QueryRow(`SELECT COUNT(*) FROM main.crimes WHERE socrata_id IN ('a','b','c')`).Scan(&n)
+	if n != 3 {
+		t.Errorf("rows a,b,c after resume: got %d, want 3", n)
 	}
 }

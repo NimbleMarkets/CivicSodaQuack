@@ -118,10 +118,18 @@ func (s *IncrementalStrategy) bootstrap(
 		return failResult(target, "failed", fmt.Errorf("create staging: %w", err)), nil
 	}
 
+	// A row limit makes the stream a prefix; order by the checkpoint column so
+	// the recorded HWM is a valid resume point for the next delta. Without a
+	// limit the whole stream lands in staging before the swap, so any order works.
+	orderBy := target.Effective.OrderBy
+	if target.Effective.Limit > 0 {
+		orderBy = hwmCol + ",:id"
+	}
+
 	var rowsWritten int64
 	var maxHWM *time.Time
 	err = client.StreamRowsCtx(ctx, s.scheme(), s.Portal, target.ID,
-		target.Effective.OrderBy, target.Effective.Where, ":*,*",
+		orderBy, target.Effective.Where, ":*,*",
 		target.Effective.Limit,
 		func(page []socrata.Row) error {
 			if err := w.InsertRowsInto("_csq_staging", schema, page); err != nil {
@@ -205,15 +213,14 @@ func (s *IncrementalStrategy) delta(
 		return failResult(target, "failed", schemaDriftError(target.Effective.Table, diffs)), nil
 	}
 
-	// Build $where = "<hwm> > 'TS'", AND-combined with target.Effective.Where if set.
-	// Strict `>` (not `>=`): we store the exact max we observed, so any row updated
-	// at the same millisecond as our HWM after we read it would be missed. Acceptable
-	// in practice (Socrata timestamps are millisecond-resolution and bursts at the
-	// exact same instant are rare). A future phase could switch to `>=` and rely on
-	// PK-upsert idempotency to dedupe.
+	// Build $where = "<hwm> >= 'TS'", AND-combined with target.Effective.Where if set.
+	// Non-strict `>=`: the checkpoint is the max timestamp seen, and a run cut
+	// short by an error, cancellation, or a row limit may have fetched only some
+	// of the rows sharing that timestamp. Re-reading them is harmless because
+	// writes are PK upserts.
 	whereClause := ""
 	if state.HWMUpdatedAt != nil {
-		whereClause = fmt.Sprintf("%s > '%s'", hwmCol, state.HWMUpdatedAt.UTC().Format("2006-01-02T15:04:05.000"))
+		whereClause = fmt.Sprintf("%s >= '%s'", hwmCol, state.HWMUpdatedAt.UTC().Format("2006-01-02T15:04:05.000"))
 	}
 	if target.Effective.Where != "" {
 		if whereClause != "" {
@@ -223,11 +230,11 @@ func (s *IncrementalStrategy) delta(
 		}
 	}
 
-	// Compound order: hwmCol then :id, for stable pagination across same-timestamp rows.
-	orderBy := target.Effective.OrderBy
-	if orderBy == "" {
-		orderBy = hwmCol + ",:id"
-	}
+	// Always order by the checkpoint column, then :id for stable pagination
+	// within a timestamp. The configured order_by (default ":id") is ignored
+	// here: checkpointing max(hwm) is only a valid resume point when rows are
+	// consumed in hwm order, so any prefix of the stream is a prefix of time.
+	orderBy := hwmCol + ",:id"
 
 	var rowsWritten int64
 	maxHWM := state.HWMUpdatedAt

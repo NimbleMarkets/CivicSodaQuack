@@ -122,11 +122,11 @@ func TestCSQ_IncrementalSmoke(t *testing.T) {
 		mu.Lock()
 		filtered := rows
 		if whereClause != "" {
-			// Only one predicate shape supported: ":updated_at > 'TS'"
-			cutoff := strings.TrimSuffix(strings.TrimPrefix(whereClause, ":updated_at > '"), "'")
+			// Only one predicate shape supported: ":updated_at >= 'TS'"
+			cutoff := strings.TrimSuffix(strings.TrimPrefix(whereClause, ":updated_at >= '"), "'")
 			filtered = filtered[:0:0]
 			for _, row := range rows {
-				if ts, _ := row[":updated_at"].(string); ts > cutoff {
+				if ts, _ := row[":updated_at"].(string); ts >= cutoff {
 					filtered = append(filtered, row)
 				}
 			}

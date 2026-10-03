@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -103,10 +104,27 @@ func newFakeSocrata(t *testing.T, datasets ...fakeDataset) *httptest.Server {
 				if !ok {
 					continue
 				}
-				if ts > cutoff { // string compare on ISO-8601 is order-preserving
+				if ts >= cutoff { // string compare on ISO-8601 is order-preserving
 					filtered = append(filtered, row)
 				}
 			}
+		}
+
+		// Honor $order for the shapes the strategies send: ":id" or "<col>,:id".
+		if order := q.Get("$order"); order != "" {
+			cols := strings.Split(order, ",")
+			sorted := append([]map[string]any(nil), filtered...)
+			sort.SliceStable(sorted, func(i, j int) bool {
+				for _, c := range cols {
+					a, _ := sorted[i][c].(string)
+					b, _ := sorted[j][c].(string)
+					if a != b {
+						return a < b
+					}
+				}
+				return false
+			})
+			filtered = sorted
 		}
 
 		// Page slice
@@ -163,11 +181,11 @@ func makeRows(n int, mk func(i int) map[string]any) []map[string]any {
 
 // parseSimpleGreaterThan recognises the single Phase 2 predicate shape:
 //
-//	<col> > '<value>'   (with surrounding whitespace ignored)
+//	<col> >= '<value>'  (with surrounding whitespace ignored)
 //
 // Returns the value if matched. Anything else returns ok=false.
 func parseSimpleGreaterThan(where string) (string, bool) {
-	re := regexp.MustCompile(`^\s*[A-Za-z_:][A-Za-z0-9_:]*\s*>\s*'([^']*)'\s*$`)
+	re := regexp.MustCompile(`^\s*[A-Za-z_:][A-Za-z0-9_:]*\s*>=?\s*'([^']*)'\s*$`)
 	m := re.FindStringSubmatch(where)
 	if m == nil {
 		return "", false
