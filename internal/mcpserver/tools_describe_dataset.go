@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
 )
 
 // DescribeDatasetArgs are the inputs to the describe_dataset MCP tool.
@@ -163,16 +165,21 @@ func loadDetail(ctx context.Context, p *Pools, alias, id string) (DatasetDetail,
 			RowsWritten: rowsWritten.Int64,
 			DurationMs:  duration.Int64,
 		}
-		if rowsWritten.Valid {
-			n := rowsWritten.Int64
-			d.RowCount = &n
-		}
 		if tableName.Valid {
 			d.TableName = tableName.String
 		}
 	}
 	if d.TableName == "" {
 		d.TableName = strings.ReplaceAll(id, "-", "_")
+	}
+	if d.LastSync != nil {
+		counts, err := duckdb.CountMainTables(ctx, pool, []string{d.TableName})
+		if err != nil {
+			return d, err
+		}
+		if n, ok := counts[d.TableName]; ok {
+			d.RowCount = &n
+		}
 	}
 
 	// HWM

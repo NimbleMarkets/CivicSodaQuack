@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
 )
 
 // ListDatasetsArgs are the inputs to the list_datasets MCP tool.
@@ -77,16 +79,16 @@ func selectPortals(p *Pools, requested string) []string {
 }
 
 // queryDatasetsForPortal returns all dataset summaries from one portal pool.
-// table_name and row_count come from the most recent status='ok' sync_runs row;
-// if no successful sync exists, table_name falls back to replace(id, '-', '_').
+// table_name comes from the most recent status='ok' sync_runs row (falling back
+// to replace(id, '-', '_') when none exists); row_count is the live count of
+// that table, not the size of the last sync batch.
 func queryDatasetsForPortal(ctx context.Context, db *sql.DB, alias string) ([]DatasetSummary, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT c.id, c.name, COALESCE(c.category, ''), s.table_name, s.rows_written
+		SELECT c.id, c.name, COALESCE(c.category, ''), s.table_name
 		FROM _csq.catalog c
 		LEFT JOIN (
 			SELECT dataset_id,
-			       FIRST(table_name ORDER BY started_at DESC) AS table_name,
-			       FIRST(rows_written ORDER BY started_at DESC) AS rows_written
+			       FIRST(table_name ORDER BY started_at DESC) AS table_name
 			FROM _csq.sync_runs
 			WHERE status = 'ok'
 			GROUP BY dataset_id
@@ -98,11 +100,11 @@ func queryDatasetsForPortal(ctx context.Context, db *sql.DB, alias string) ([]Da
 	defer rows.Close()
 
 	var out []DatasetSummary
+	var synced []string
 	for rows.Next() {
 		var id, name, category string
 		var table sql.NullString
-		var rowCount sql.NullInt64
-		if err := rows.Scan(&id, &name, &category, &table, &rowCount); err != nil {
+		if err := rows.Scan(&id, &name, &category, &table); err != nil {
 			return nil, err
 		}
 		summary := DatasetSummary{
@@ -116,11 +118,31 @@ func queryDatasetsForPortal(ctx context.Context, db *sql.DB, alias string) ([]Da
 		} else {
 			summary.TableName = strings.ReplaceAll(id, "-", "_")
 		}
-		if rowCount.Valid {
-			n := rowCount.Int64
-			summary.RowCount = &n
-		}
 		out = append(out, summary)
+		if table.Valid {
+			synced = append(synced, table.String)
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	counts, err := duckdb.CountMainTables(ctx, db, synced)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if !hasCount(counts, out[i].TableName) {
+			continue
+		}
+		n := counts[out[i].TableName]
+		out[i].RowCount = &n
+	}
+	return out, nil
+}
+
+func hasCount(counts map[string]int64, table string) bool {
+	_, ok := counts[table]
+	return ok
 }

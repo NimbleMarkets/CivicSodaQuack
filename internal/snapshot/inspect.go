@@ -3,8 +3,11 @@
 package snapshot
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/neomantra/CivicSodaQuack/internal/duckdb"
 )
 
 // assertIsCSQDB returns nil if db has a _csq.catalog table.
@@ -32,23 +35,44 @@ func countDatasets(db *sql.DB) (int64, error) {
 	return n, nil
 }
 
-// countTotalRows returns the SUM of rows_written across the most recent
-// status='ok' row per dataset_id. Datasets that have never successfully synced
-// contribute 0. Failed/aborted runs are ignored.
+// countTotalRows returns the SUM of live row counts across the tables named by
+// the most recent status='ok' sync_runs row per dataset_id. Datasets that have
+// never successfully synced contribute 0. Failed/aborted runs are ignored.
+// rows_written is deliberately not used: it records the last batch, not the
+// table's size.
 func countTotalRows(db *sql.DB) (int64, error) {
-	var n sql.NullInt64
-	err := db.QueryRow(`
-		SELECT SUM(rows_written) FROM (
-			SELECT FIRST(rows_written ORDER BY started_at DESC) AS rows_written
-			FROM _csq.sync_runs
-			WHERE status = 'ok'
-			GROUP BY dataset_id
-		) latest`).Scan(&n)
+	rows, err := db.Query(`
+		SELECT FIRST(table_name ORDER BY started_at DESC)
+		FROM _csq.sync_runs
+		WHERE status = 'ok'
+		GROUP BY dataset_id`)
 	if err != nil {
 		return 0, fmt.Errorf("count total rows: %w", err)
 	}
-	if !n.Valid {
-		return 0, nil
+	var tables []string
+	for rows.Next() {
+		var t sql.NullString
+		if err := rows.Scan(&t); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("count total rows: %w", err)
+		}
+		if t.Valid {
+			tables = append(tables, t.String)
+		}
 	}
-	return n.Int64, nil
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("count total rows: %w", err)
+	}
+	rows.Close()
+
+	counts, err := duckdb.CountMainTables(context.Background(), db, tables)
+	if err != nil {
+		return 0, fmt.Errorf("count total rows: %w", err)
+	}
+	var total int64
+	for _, n := range counts {
+		total += n
+	}
+	return total, nil
 }

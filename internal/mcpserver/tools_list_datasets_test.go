@@ -142,3 +142,41 @@ func TestListDatasets_TwoPortals(t *testing.T) {
 		t.Errorf("bbbb-0002 portal: got %q, want b", gotByID["bbbb-0002"])
 	}
 }
+
+// A bootstrap followed by a tiny delta leaves rows_written = delta size; the
+// reported count must still be the table's cardinality.
+func TestListAndDescribe_RowCountIsTableSizeNotLastBatch(t *testing.T) {
+	hwm := time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC)
+	pools, cleanup := openFixturePools(t,
+		FixtureDataset{
+			ID: "aaaa-0001", Name: "Crimes", TableName: "aaaa_0001",
+			ColumnDefs: []string{"socrata_id VARCHAR"},
+			Rows:       []map[string]any{{"socrata_id": "a"}, {"socrata_id": "b"}, {"socrata_id": "c"}},
+			Synced:     true, HWM: hwm,
+		})
+	defer cleanup()
+
+	// Latest successful run only wrote one row.
+	if _, err := pools.Portals["test"].DB.Exec(
+		`UPDATE _csq.sync_runs SET rows_written = 1 WHERE dataset_id = 'aaaa-0001'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListDatasets(context.Background(), pools, ListDatasetsArgs{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("list: %v %v", got, err)
+	}
+	if got[0].RowCount == nil || *got[0].RowCount != 3 {
+		t.Errorf("list row_count: got %v, want 3", got[0].RowCount)
+	}
+	d, err := DescribeDataset(context.Background(), pools, DescribeDatasetArgs{DatasetID: "aaaa-0001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.RowCount == nil || *d.RowCount != 3 {
+		t.Errorf("describe row_count: got %v, want 3", d.RowCount)
+	}
+	if d.LastSync == nil || d.LastSync.RowsWritten != 1 {
+		t.Errorf("last_sync.rows_written should still report 1: %+v", d.LastSync)
+	}
+}

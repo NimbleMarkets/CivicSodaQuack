@@ -111,3 +111,21 @@ func TestCountTotalRows_IgnoresFailedRuns(t *testing.T) {
 		t.Errorf("got %d, want 2 (failed run must be ignored)", got)
 	}
 }
+
+func TestCountTotalRows_UsesTableSizeNotLastBatch(t *testing.T) {
+	hwm := time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC)
+	db, _ := openFixtureDB(t,
+		FixtureDataset{
+			ID: "aaaa-0001", Name: "A", TableName: "a",
+			ColumnDefs: []string{"v INT"},
+			Rows:       []map[string]any{{"v": 1}, {"v": 2}, {"v": 3}},
+			Synced:     true, HWM: hwm,
+		})
+	if _, err := db.Exec(`UPDATE _csq.sync_runs SET rows_written = 1`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := countTotalRows(db)
+	if err != nil || got != 3 {
+		t.Errorf("got %d, %v; want 3", got, err)
+	}
+}
