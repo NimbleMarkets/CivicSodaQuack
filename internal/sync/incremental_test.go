@@ -475,3 +475,85 @@ func TestIncremental_DeltaResumesPastOutOfOrderIDs(t *testing.T) {
 		t.Errorf("rows a,b,c after resume: got %d, want 3", n)
 	}
 }
+
+// Bootstrap is the full-replace path: rows land in staging and swap in whole.
+func TestIncremental_Bootstrap_MultiPageSwap(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	ds := fakeDataset{
+		ID: "aaaa-0001", Name: "Crimes",
+		Columns: []map[string]string{
+			{"fieldName": "id", "dataTypeName": "text"},
+			{"fieldName": "score", "dataTypeName": "number"},
+		},
+		Rows: makeRows(7, func(i int) map[string]any {
+			return map[string]any{":id": "r" + itoa(i), ":updated_at": "2026-04-22T00:00:0" + itoa(i) + ".000", "id": "r" + itoa(i), "score": float64(i)}
+		}),
+	}
+	srv := newFakeSocrata(t, ds)
+	client := &socrata.Client{BatchSize: 3}
+	strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: "run1"}
+	target := DatasetTarget{ID: ds.ID, Name: ds.Name,
+		Effective: config.Effective{DatasetID: ds.ID, Table: "crimes", OrderBy: ":id", BatchSize: 3}}
+
+	res, err := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+	if err != nil || res.Status != "ok" {
+		t.Fatalf("sync: status=%q err=%v res.Err=%v", res.Status, err, res.Err)
+	}
+	if res.RowsWritten != 7 {
+		t.Errorf("rows: got %d, want 7", res.RowsWritten)
+	}
+	var n int
+	_ = w.DB.QueryRow(`SELECT COUNT(*) FROM main.crimes`).Scan(&n)
+	if n != 7 {
+		t.Errorf("main.crimes rowcount: got %d, want 7", n)
+	}
+}
+
+// A bootstrap that fails mid-stream must leave the prior table untouched and
+// record no dataset_state, so the next run bootstraps again.
+func TestIncremental_Bootstrap_FailureLeavesPriorTableIntact(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	if _, err := w.DB.Exec(`CREATE TABLE main.crimes (id VARCHAR, score DOUBLE)`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for i := 0; i < 100; i++ {
+		if _, err := w.DB.Exec(`INSERT INTO main.crimes VALUES (?, ?)`, "prior"+itoa(i), float64(i)); err != nil {
+			t.Fatalf("seed insert: %v", err)
+		}
+	}
+
+	ds := fakeDataset{
+		ID: "aaaa-0001", Name: "Crimes",
+		Columns: []map[string]string{
+			{"fieldName": "id", "dataTypeName": "text"},
+			{"fieldName": "score", "dataTypeName": "number"},
+		},
+		Rows: makeRows(20, func(i int) map[string]any {
+			return map[string]any{":id": "n" + itoa(i), ":updated_at": "2026-04-22T00:00:00.000", "id": "new" + itoa(i), "score": float64(i)}
+		}),
+		FailAtOffset: 5,
+	}
+	srv := newFakeSocrata(t, ds)
+	client := &socrata.Client{BatchSize: 5, MaxRetries: 1, RetryWait: time.Millisecond}
+	strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: "run2"}
+	target := DatasetTarget{ID: ds.ID, Name: ds.Name,
+		Effective: config.Effective{DatasetID: ds.ID, Table: "crimes", OrderBy: ":id", BatchSize: 5}}
+
+	res, _ := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+	if res.Status != "failed" {
+		t.Errorf("status: got %q, want failed", res.Status)
+	}
+	var n int
+	var firstID string
+	_ = w.DB.QueryRow(`SELECT COUNT(*), MIN(id) FROM main.crimes`).Scan(&n, &firstID)
+	if n != 100 || firstID == "new0" {
+		t.Errorf("prior table not preserved: n=%d first=%q", n, firstID)
+	}
+	if state, _ := w.ReadDatasetState(ds.ID); state != nil {
+		t.Errorf("dataset_state written after failed bootstrap: %+v", state)
+	}
+}

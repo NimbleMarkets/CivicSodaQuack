@@ -87,8 +87,9 @@ func tableHasSocrataIDPK(w *duckdb.Writer, table string) (bool, error) {
 
 // bootstrap streams the full dataset into _csq_staging.<table>_<runID> with the
 // socrata_id PK installed, swaps it into main, then writes dataset_state with
-// the observed max(:updated_at). Mirrors FullReplaceStrategy.Sync but tracks
-// HWM during streaming so we don't have to reread the source.
+// the observed max(:updated_at). The HWM is tracked while streaming so the
+// source is not read twice. A failed bootstrap leaves main and dataset_state
+// untouched.
 func (s *IncrementalStrategy) bootstrap(
 	ctx context.Context,
 	target DatasetTarget,

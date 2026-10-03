@@ -20,7 +20,7 @@ import (
 
 // Deps are the collaborators the orchestrator needs. All fields are required
 // except Resolver (defaults to DefaultSelectorResolver), Strategy (defaults to
-// FullReplaceStrategy), and Reporter (defaults to StderrReporter to os.Stderr).
+// IncrementalStrategy), and Reporter (defaults to StderrReporter to os.Stderr).
 type Deps struct {
 	DB             *duckdb.Writer
 	Client         *socrata.Client
