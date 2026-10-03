@@ -26,7 +26,6 @@ func runSync(args []string) error {
 		refreshCatalog bool
 		concurrency    int
 		only           string
-		verbose        bool
 		fullRefresh    []string
 		fullRefreshAll bool
 		noLock         bool
@@ -37,7 +36,6 @@ func runSync(args []string) error {
 	fs.BoolVar(&refreshCatalog, "refresh-catalog", false, "Force refetch catalog before resolution")
 	fs.IntVar(&concurrency, "concurrency", 0, "Override YAML concurrency (0 = use YAML)")
 	fs.StringVar(&only, "only", "", "Comma-separated 4x4 ids to intersect with the resolved set")
-	fs.BoolVarP(&verbose, "verbose", "v", false, "Verbose progress")
 	fs.StringArrayVar(&fullRefresh, "full-refresh", nil,
 		"Force named dataset(s) to bootstrap this run (repeatable)")
 	fs.BoolVar(&fullRefreshAll, "full-refresh-all", false,

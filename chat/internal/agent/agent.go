@@ -137,18 +137,16 @@ type Response struct {
 type Runner struct {
 	agent   fantasy.Agent
 	model   fantasy.LanguageModel
-	store   data.Store
 	opts    Options
 	mu      sync.Mutex
 	history []fantasy.Message
-	turn    int
 }
 
 // New builds a Runner over an already constructed model, which is how tests
 // supply a fake. Use Open for the model named in opts.
 func New(model fantasy.LanguageModel, store data.Store, opts Options) *Runner {
 	opts = opts.withDefaults()
-	r := &Runner{model: model, store: store, opts: opts}
+	r := &Runner{model: model, opts: opts}
 	r.agent = fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(systemPrompt(store.Portals(), time.Now(), opts.Charts != nil, notesArg(opts))),
 		fantasy.WithTools(tools(store, opts)...),
@@ -269,7 +267,6 @@ func (r *Runner) Ask(ctx context.Context, prompt string, progress ProgressFunc, 
 		}
 	}
 	r.mu.Lock()
-	r.turn++
 	history := append([]fantasy.Message(nil), r.history...)
 	r.mu.Unlock()
 
