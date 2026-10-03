@@ -197,3 +197,57 @@ func TestQuerySQL_BlocksExternalFileAccess(t *testing.T) {
 		t.Errorf("rowcount=%d", got.RowCount)
 	}
 }
+
+func TestQuerySQL_RejectsMultiStatementEscape(t *testing.T) {
+	pools, cleanup := openFixturePools(t, FixtureDataset{ID: "aaaa-0001", Name: "X"})
+	defer cleanup()
+
+	for _, q := range []string{
+		`COMMIT; CREATE TABLE main.evil (x INT); SELECT 1`,
+		`SELECT 1; SELECT 2`,
+		`COMMIT`,
+		`PRAGMA version`,
+		``,
+	} {
+		if _, err := QuerySQL(context.Background(), pools, QuerySQLArgs{SQL: q}, time.Second); err == nil {
+			t.Errorf("expected rejection for %q", q)
+		}
+	}
+	// Nothing leaked into the host.
+	var n int
+	if err := pools.Host.QueryRow(`SELECT count(*) FROM duckdb_tables() WHERE table_name = 'evil'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("evil table persisted: n=%d err=%v", n, err)
+	}
+}
+
+func TestQuerySQL_AllowsReadShapedStatements(t *testing.T) {
+	pools, cleanup := openFixturePools(t, FixtureDataset{ID: "aaaa-0001", Name: "X"})
+	defer cleanup()
+
+	for _, q := range []string{
+		`SELECT 1;`,
+		`WITH a AS (SELECT 1 AS x) SELECT * FROM a`,
+		`FROM range(3)`,
+		`SELECT ';'`,
+		`DESCRIBE SELECT 1`,
+		`SHOW TABLES`,
+	} {
+		if _, err := QuerySQL(context.Background(), pools, QuerySQLArgs{SQL: q}, time.Second); err != nil {
+			t.Errorf("%q: %v", q, err)
+		}
+	}
+}
+
+func TestQuerySQL_OversizedFirstRowIsTruncated(t *testing.T) {
+	pools, cleanup := openFixturePools(t, FixtureDataset{ID: "aaaa-0001", Name: "X"})
+	defer cleanup()
+
+	got, err := QuerySQL(context.Background(), pools,
+		QuerySQLArgs{SQL: `SELECT repeat('x', 2000000) AS big`}, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Truncated || got.RowCount != 0 || got.Note == "" {
+		t.Errorf("want truncated empty result with note, got truncated=%v rows=%d note=%q", got.Truncated, got.RowCount, got.Note)
+	}
+}

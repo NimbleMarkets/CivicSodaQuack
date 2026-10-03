@@ -50,6 +50,10 @@ func QuerySQL(parent context.Context, p *Pools, args QuerySQLArgs, timeout time.
 	}
 	defer conn.Close()
 
+	if err := requireSingleStatement(ctx, conn, args.SQL); err != nil {
+		return QuerySQLResult{}, err
+	}
+
 	if _, err := conn.ExecContext(ctx, `BEGIN TRANSACTION READ ONLY`); err != nil {
 		return QuerySQLResult{}, fmt.Errorf("begin read-only tx: %w", err)
 	}
@@ -84,9 +88,13 @@ func QuerySQL(parent context.Context, p *Pools, args QuerySQLArgs, timeout time.
 		}
 		// Estimate added bytes (rough JSON size)
 		b, _ := json.Marshal(row)
-		if approxBytes+len(b)+1 > maxBytes && out.RowCount > 0 {
+		if approxBytes+len(b)+1 > maxBytes {
 			out.Truncated = true
-			out.Note = fmt.Sprintf("result truncated at ~%d bytes; add LIMIT or SELECT fewer columns", maxBytes)
+			if out.RowCount == 0 {
+				out.Note = fmt.Sprintf("first row exceeds ~%d bytes and was omitted; SELECT fewer or smaller columns", maxBytes)
+			} else {
+				out.Note = fmt.Sprintf("result truncated at ~%d bytes; add LIMIT or SELECT fewer columns", maxBytes)
+			}
 			break
 		}
 		approxBytes += len(b) + 1
@@ -97,6 +105,43 @@ func QuerySQL(parent context.Context, p *Pools, args QuerySQLArgs, timeout time.
 		return QuerySQLResult{}, formatQueryError(ctx, err)
 	}
 	return out, nil
+}
+
+// requireSingleStatement parses sqlText with DuckDB's own parser and rejects
+// anything other than exactly one read-shaped statement. The read-only
+// transaction is not enough on its own: the driver executes a multi-statement
+// string statement by statement, so `COMMIT; CREATE TABLE ...` would end the
+// transaction and then write to the in-memory host. json_serialize_sql only
+// accepts SELECT-shaped statements (SELECT, WITH, FROM, DESCRIBE, SHOW,
+// SUMMARIZE), so DDL, DML, transaction control, PRAGMA and EXPLAIN fail here.
+func requireSingleStatement(ctx context.Context, conn *sql.Conn, sqlText string) error {
+	literal := "'" + strings.ReplaceAll(sqlText, "'", "''") + "'"
+	var raw any
+	if err := conn.QueryRowContext(ctx, `SELECT json_serialize_sql(`+literal+`)`).Scan(&raw); err != nil {
+		return formatQueryError(ctx, err)
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("parse sql: %w", err)
+	}
+	var parsed struct {
+		Error        bool              `json:"error"`
+		ErrorMessage string            `json:"error_message"`
+		Statements   []json.RawMessage `json:"statements"`
+	}
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		return fmt.Errorf("parse sql: %w", err)
+	}
+	if parsed.Error {
+		return fmt.Errorf("query_sql accepts a single read-only SELECT-style statement: %s", parsed.ErrorMessage)
+	}
+	switch n := len(parsed.Statements); {
+	case n == 0:
+		return fmt.Errorf("query_sql: empty statement")
+	case n > 1:
+		return fmt.Errorf("query_sql accepts exactly one statement, got %d", n)
+	}
+	return nil
 }
 
 func scanRow(rows *sql.Rows, n int) ([]any, error) {
