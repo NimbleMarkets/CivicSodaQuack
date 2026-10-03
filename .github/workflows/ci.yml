@@ -16,7 +16,9 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          # chat/ needs Go 1.27 (Fantasy's floor); the root module's 1.26
+          # directive is a minimum, so one toolchain serves both.
+          go-version-file: chat/go.mod
 
       - name: gofmt
         run: |
@@ -32,6 +34,12 @@ jobs:
       - run: go build ./...
 
       - run: go test -race ./...
+
+      - name: chat module
+        run: |
+          go -C chat vet ./...
+          go -C chat build ./...
+          go -C chat test -race ./...
 
   lint:
     runs-on: ubuntu-latest
