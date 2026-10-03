@@ -122,6 +122,21 @@ func (in presentChartInput) spec() (chartSpec, semanticTypes json.RawMessage, fi
 	return chartSpec, semanticTypes, fields
 }
 
+// A model cannot report a number it was never shown: when a result is a
+// scalar or a handful of rows it asked the person to see, it also gets the
+// values, so "how many?" is answered from the data, not invented.
+const (
+	smallResultRows  = 10
+	smallResultCells = 60
+)
+
+func smallResultValues(t present.Table) string {
+	if len(t.Rows) == 0 || len(t.Rows) > smallResultRows || len(t.Rows)*len(t.Columns) > smallResultCells {
+		return ""
+	}
+	return "\nValues (state numbers from these, never from memory):\n" + toCSV(t.Columns, t.Rows)
+}
+
 type scratchListInput struct {
 	Scope string `json:"scope,omitempty" enum:"session,global" description:"session (default) is this session's working notes; global is shared by every session."`
 }
@@ -294,6 +309,7 @@ func tools(store data.Store, opts Options) []fantasy.AgentTool {
 				if tbl.Truncated {
 					fmt.Fprintf(&b, " Only the first %d rows are shown; suggest narrowing the query if the person needs more.", len(tbl.Rows))
 				}
+				b.WriteString(smallResultValues(tbl))
 				return b.String(), tbl.Total, nil
 			})
 		})

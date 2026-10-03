@@ -230,3 +230,22 @@ func TestSystemPrompt_ChartsOnlyWhenARendererExists(t *testing.T) {
 		t.Errorf("prompt with charts lacks the tool or guidance, or has placeholders:\n%s", with)
 	}
 }
+
+func TestPresentTable_SmallResultsAlsoGiveTheModelTheValues(t *testing.T) {
+	model := agenttest.NewFakeModel(
+		agenttest.ToolCall("c1", "present_table", `{"sql":"SELECT count(*) AS n FROM test.main.crimes","title":"How many"}`),
+		agenttest.ToolCall("c2", "present_table", `{"sql":"SELECT range AS i, range*2 AS j FROM range(200)","title":"Many rows"}`),
+		agenttest.Text("done"),
+	)
+	r := New(model, seedStore(t), Options{})
+	if _, err := r.Ask(context.Background(), "count", nil, func(present.Presentation) {}); err != nil {
+		t.Fatal(err)
+	}
+	last := model.Calls[len(model.Calls)-1]
+	if told := agenttest.ToolResultText(last, "c1"); !strings.Contains(told, "n\n2") {
+		t.Errorf("a scalar result must reach the model as a value: %q", told)
+	}
+	if told := agenttest.ToolResultText(last, "c2"); strings.Contains(told, "Values") || strings.Contains(told, "198") {
+		t.Errorf("a large result must stay off the model's context: %q", told)
+	}
+}
