@@ -5,7 +5,11 @@ surface for AI agents. See [AGENTS.md](./AGENTS.md) for the full project brief.
 
 ## Status
 
-**Phase 4** — snapshot publishing. After syncing one or more portals into per-portal DuckDB files, run `csq snapshot` to package one as a `.tar.zst` for distribution; consume with `csq fetch --from <url>`.
+**Phase 7** — snapshot distribution. Sync one or more portals into per-portal DuckDB files, analyse them through curated modes, query them ad hoc with `csq query`, and serve them to agents over MCP (read tools always; write tools when a config is paired with a database). `csq snapshot` packages a portal as a `.tar.zst`; `csq fetch --from <url>` or `--index <url>` consumes one.
+
+Ask it a question directly with `csq investigate "<question>" --db <portal.duckdb>`: it routes the question to a curated investigation, declares its indicators before reading any data, measures them, tries to explain each result away, and reports a verdict with the confidence and caveats attached.
+
+Prefer not to use a terminal? `csq web --db <portal.duckdb> --open` serves the same analyses as a local web page.
 
 ## Quickstart
 
@@ -25,6 +29,589 @@ go build -o csq ./cmd/csq
 ```
 
 Set `SOCRATA_APP_TOKEN` (referenced in the YAML as `${SOCRATA_APP_TOKEN}`) to lift anonymous rate limits.
+
+### Use it in a browser
+
+Not everyone wants a terminal. `csq web` serves the same analyses as a local web
+page, from the same binary — no install step, no toolchain, no files next to the
+executable.
+
+```bash
+./csq web --open        # start from nothing — the page walks you through it
+```
+
+With no `--db`, the page opens on a **city picker**: choose a city, choose an
+analysis, see how many datasets and roughly how long it will take, confirm. csq
+creates the database, writes the same YAML `csq modes init` would have written,
+and downloads only what that analysis needs. The config is written to disk on
+purpose — whatever you set up in the page stays drivable from the command line,
+because a UI that creates state its own CLI cannot see is a trap.
+
+Point it at databases you already have instead:
+
+```bash
+./csq web --db data.cityofchicago.org.duckdb --open
+```
+
+Three views: **Analyses** (the modes, with a readiness dot so an unsynced
+analysis is never mistaken for one that found nothing), **Explore data** (every
+dataset the portal publishes, and whether you hold a copy), and **Data health**
+(the `research` mode in plain language — what failed, what is missing, which
+columns carry impossible dates).
+
+Two properties are structural rather than incidental:
+
+- **The browser cannot send SQL.** Every endpoint takes a mode name and a query
+  name, and runs the SQL the mode declares. There is no ad-hoc query box, so
+  there is no injection surface, and what runs in the page is exactly what
+  `csq modes run` runs — caveats included.
+- **Caveats and exclusions ship with the rows.** They are fields on the same
+  response, and the page has no code path that renders a table without them. A
+  city excluded from a comparison is named above the numbers, never in a
+  footnote below them.
+
+Result tables sort by any column and filter as you type, both done on the rows
+already in the browser — rearranging rows you were already given is not the same
+as asking a new question, so this needs no SQL and stays instant. Any result
+downloads as **CSV or JSON**, re-run server-side with a much higher row cap than
+the page shows. Both formats carry the caveats and the excluded cities: CSV as
+comment rows above the header, JSON as fields. An export that dropped them would
+turn a hedged answer into a bare spreadsheet, which is how these numbers get
+misquoted.
+
+Pair `--config` with `--db` to let the page download data for databases you
+named yourself:
+
+```bash
+./csq web --db data.cityofchicago.org.duckdb \
+          --config data.cityofchicago.org.yaml --open
+```
+
+An analysis with no data then offers a **Download this data** button that syncs
+just the datasets that analysis needs, with live per-dataset progress. Downloads
+take the same advisory lock `csq sync` takes, and one runs at a time. Without
+`--config` — and without the city picker, which `--db` turns off — the page is
+read-only and prints the command instead. `csq web --db new.duckdb --config
+portal.yaml` creates the database if it does not exist yet.
+
+Every database is opened `READ_ONLY`, so any number of *readers* can share one
+file — this page, a `csq mcp` server, a `csq query` in a terminal. A writer is
+not one of them: DuckDB locks the database file against other processes, so the
+page cannot attach a database that `csq sync` is writing elsewhere, and a sync
+started elsewhere cannot open one this page is holding. The lock is symmetric
+and the loser gets `Could not set lock on file`. Stop the other process first.
+
+The page's own **Download this data** button is unaffected, because that write
+happens inside this process, which already holds the file — the lock excludes
+other processes, not other handles.
+
+#### Share the results
+
+Any mode renders to a standalone HTML report — inline SVG charts, inline CSS,
+no scripts and no external requests — so it can be emailed, dropped in a shared
+folder, or opened on a machine with no network:
+
+```
+http://127.0.0.1:8080/report/corruption.html?download=1
+```
+
+The report leads with the mode's caveats and prints the full table under every
+chart. Charts are drawn only where the result shape supports one honestly: a
+single label column and a measure. Results with several numeric columns of
+different units stay tables, because the chart that would fit them is a
+dual-axis chart.
+
+The default listen address is loopback. csq has no login, so `--addr` on a wider
+interface publishes every synced dataset to anyone who can reach the port; the
+server warns when you do it.
+
+### Modes
+
+Modes are curated analysis profiles: for a given civic question, the datasets worth syncing, the SQL that turns them into an answer, and the caveats that keep the answer honest. Running `csq` with no arguments lists them.
+
+```bash
+./csq modes                    # list
+./csq modes show corruption    # datasets, queries, and caveats
+```
+
+| Mode | Scope | What it covers |
+| --- | --- | --- |
+| `corruption` | single portal | Contract concentration by vendor and department, procurement-type mix, lobbyist compensation, contribution recipients, and the overlap between the two |
+| `ranking` | cross-portal | Comparison of portal breadth, category coverage, how much you hold locally, and freshness |
+| `police` | single portal | Civilian oversight — COPA/BIA complaint volume, finding and category outcomes, complainant demographics, officer tenure, shootings, beat distribution |
+| `research` | cross-portal | Provenance for citation, failed-run and coverage gaps, schema inventory, candidate join keys, and generated data-quality checks |
+| `personal` | cross-portal | Your own mode. Ships empty — an inventory of what you hold — until you fill it with `csq modes ask "<question>"` or `csq modes add <pattern>` |
+
+For a mode with datasets, generate a config and sync it, then run the queries:
+
+```bash
+./csq modes init police --output police.yaml
+./csq sync --config police.yaml
+./csq modes run police --db data.cityofchicago.org.duckdb
+./csq modes run police --db data.cityofchicago.org.duckdb --query finding-outcomes
+```
+
+`ranking` and `research` have no datasets of their own — they read the `_csq` bookkeeping schema that every csq database carries, so point them at ones you already built:
+
+```bash
+./csq modes run ranking  --db chicago.duckdb --db cookcounty.duckdb
+./csq modes run research --db chicago.duckdb --db cookcounty.duckdb
+```
+
+`research` is the due-diligence pass that belongs *before* an analysis. It records provenance for citation (which datasets, when, which config hash), surfaces failed runs and the gap between what a portal publishes and what you pulled, and profiles the corpus — schema inventory, candidate join keys, and every date column that needs range-checking. Two of its queries emit SQL rather than guessing at numbers they cannot compute in a single pass:
+
+```bash
+./csq modes run research --db cookcounty.duckdb --query date-range-sql --quiet
+```
+
+Running the statements that produces against the Cook County corpus reports a `sentence_date` reaching the year **2921** and an `arrest_date` starting in **1915** — the kind of upstream defect that silently ruins a time series. Read generated SQL before running it, as you would any generated code.
+
+`modes run` attaches every portal `READ_ONLY`, so it can share a file with other readers — a `csq mcp` server, another `modes run`. It cannot read a database some other process is *writing*: DuckDB's file lock excludes a reader and a writer from each other in either order, so a running `csq sync` will fail this command with `Could not set lock on file`, and vice versa. Read-only attach avoids contending with other readers, not with a sync.
+
+Each mode carries interpretation caveats, printed by `modes show`, printed above `modes run` output, and embedded as comments in the YAML that `modes init` writes. They are a structural requirement — a test fails the build if a mode declares none. Contract concentration is frequently legitimate (specialised work may have one qualified bidder), and an unsustained complaint is not a false one; a tool reporting on procurement and policing should say so where the numbers are. Three scope limits worth stating up front:
+
+- **`ranking` compares open-data transparency, not livability or governance.** Outcome-based city ranking would need population denominators and a mapping between incompatible per-city schemas, neither of which csq has.
+- **`police` is civilian-side oversight only**, reading accountability records about the department. Chicago's published COPA and BIA extracts carry no officer identifier, so repeat-officer analysis is not possible with them; arrest volume is included solely as a denominator for complaint rates.
+- **A recent timestamp does not mean recent data.** `research --query provenance` reports when *csq* last pulled a dataset, which says nothing about the city. `_csq.catalog.updated_at` is better — it carries the portal's `data_updated_at`, ignoring metadata edits so that rewriting a description no longer makes a stale dataset look current — but it still moves when a portal republishes unchanged rows. The five Cook County State's Attorney datasets in `datacatalog.cookcountyil.gov.yaml` are the live example: abandoned by the SAO on 2024-12-30 with coverage ending 2024-11-30, yet `updated_at` reads 2026-04-02. Read the dataset's own description before describing anything as current; no timestamp on either side is sufficient.
+
+Adding a built-in mode means appending to the registry in `internal/modes/`, not touching the CLI. You do not need a Go toolchain to add one of your own — see below.
+
+### Writing your own modes
+
+A mode is data. Drop a YAML or JSON file into `~/.csq/modes/` (override with `--modes-dir` or `CSQ_MODES_DIR`) and csq loads it at startup, with no rebuild. The two formats are the same document with the same field names, the same validation, and the same error messages; JSON exists because programs write it.
+
+```bash
+./csq modes schema                  # the exact shape a file must match
+./csq modes lint my-mode.json       # check it before use
+./csq modes where                   # where files are loaded from, and what loaded
+```
+
+A file declares either a **mode** (`kind: mode`) or a **binding** (`kind: binding`):
+
+- A **mode** names the *concepts* it needs — logical tables described by what they must contain — plus the SQL and the caveats. Queries refer to a table only as `{{c:concept_name}}` and to columns by canonical names, which is what lets one mode serve several cities.
+- A **binding** maps one portal's actual tables and columns onto those concepts. A `columns` value may be any SQL expression, so a portal publishing money as text or a date as `MM/DD/YYYY` binds through `TRY_CAST(amt AS DOUBLE)` or `try_strptime(issued, '%m/%d/%Y')` without any query knowing.
+
+Two rules the loader enforces rather than suggests. Every mode must declare `caveats` — a number without its limits is how civic data gets misread, and a file without them does not load. And when a binding supplies a `columns` map, that map is authoritative: a required column missing from it is an error at load time, because treating it as merely unmapped would let a `NULL` read as a real value, which for a rate is indistinguishable from a good answer.
+
+An external mode **replaces a built-in of the same name**, so you can fix or extend a shipped mode without rebuilding csq.
+
+### The `personal` mode
+
+`personal` is the mode you write for yourself, and the only built-in that expects to be replaced. Two ways to fill it in — ask in English, or name the shape and columns yourself. Both produce the same JSON, checked the same way, and **neither makes a network call**.
+
+| | Command |
+| --- | --- |
+| Ask in English | `csq modes ask "<question>" --db <file>` |
+| Pick a shape yourself | `csq modes add <pattern> --db <file> ...` |
+
+#### Asking a question
+
+```bash
+./csq modes ask "which vendors got the most money?" --db chicago.duckdb
+```
+
+```
+  question  which vendors got the most money?
+
+  pattern   top-n         — matched "most"
+  table     contracts     — it has a column matching "vendor"
+  entity    vendor_name   — matched "vendor" in your question
+  measure   award_amount  — matched "award" in your question
+
+  Use this?  [Y]es  [n]o  [e]dit as a command
+```
+
+csq matches your question against its analysis patterns and the columns of the tables you actually hold, using keyword scoring over your own schema. It runs entirely on your machine.
+
+This works because the answer space is tiny. csq is **not** translating your question into arbitrary SQL — that is the brittle approach, where a plausible-looking wrong query is the failure mode. It is choosing among six reviewed shapes and the columns of one table, which is a ranking problem over a few dozen candidates. Three rules keep it honest:
+
+- **It shows its reasoning.** Every choice comes back with the word that produced it, so a wrong guess is visible *before* anything is saved.
+- **It refuses rather than guesses.** A question it cannot place, or a role it cannot fill, comes back as a message telling you how to say it explicitly. It also warns when your question and the shape disagree — ask for the *least* and it will tell you the pattern ranks largest-first.
+- **It never writes SQL.** The worst it can do is pick the wrong template, and that template was still written and reviewed by a person.
+
+Press `e` and it prints the equivalent `csq modes add` command, so correcting one column is editing a line rather than rephrasing a question and hoping.
+
+#### Patterns — the shapes underneath
+
+`modes ask` is a front-end onto the patterns; you can also drive them directly, which is the reliable route when you know exactly what you want. Most civic analysis is a handful of shapes. "Which vendors got the most money", "which contractors pull the most permits", "who receives the most contributions" are one shape — rank entities by a summed measure — pointed at different columns. csq ships those shapes as reviewed SQL templates with holes for the columns you name:
+
+```bash
+./csq modes patterns                      # the shapes available
+./csq modes patterns show top-n           # its SQL, parameters, and caveats
+./csq modes tables --db chicago.duckdb    # the columns you can point one at
+
+./csq modes add top-n --db chicago.duckdb --table contracts \
+    --entity vendor_name --measure award_amount
+./csq modes run personal --db chicago.duckdb
+```
+
+| Pattern | What it answers |
+| --- | --- |
+| `top-n` | Who got the most, by summed value |
+| `concentration` | Who takes an outsized share *within* a group — one vendor's share of one department's spend |
+| `trend` | Counts or sums by month over time |
+| `breakdown` | Counts and shares across a category |
+| `coverage` | How populated each column is — the due-diligence pass before trusting anything else |
+| `name-variants` | One organisation recorded under several spellings |
+
+Each `modes add` appends to the mode, so you build it up a query at a time. Merging is deterministic and your file always wins every conflict, so an edit you made survives the next question you ask.
+
+Two things patterns handle that are easy to get wrong by hand. **Casts come from the declared column type, not the column's name** — civic portals publish money as `VARCHAR` constantly, and the generated binding wraps it in `TRY_CAST` so one unparseable row is excluded and counted against the confidence score rather than killing the query. And **a text date column is refused unless you pass `--date-format`**, because guessing between `MM/DD/YYYY` and `DD/MM/YYYY` mislabels a third of the year without ever raising an error.
+
+The caveats are what make a pattern more than a shortcut. The ones that matter most are properties of the *shape*, not the data — a top-N ranking always hides its tail, a free-text entity column always understates concentration because the same body appears under several spellings, a count by month is always distorted by a partial final month. Written once against the pattern, they are reviewed prose rather than something regenerated per run.
+
+### Confidence scores
+
+Every mode query carries a **confidence score**: how far the data behind that particular answer can be trusted. It appears under `modes run`, above the table in the browser, in both export formats, and in the shareable report.
+
+```
+  Confidence: 54% (low) — the share of records this query reads that are
+  present and usable
+
+  ✓ dataset successfully synced on 28 Aug 2026
+      The run recorded writing 5,440,343 rows.
+  ✓ all 2 columns this query reads are populated
+  ✓ local copy is current with the portal
+
+  ⚠ portal has not updated this data in 122 days
+  ✗ 54% of expected rows present
+      4,631,164 rows short of the 10,071,507 reference count.
+
+  Source freshness: 122 days
+```
+
+That is a real assessment of NYC's complaint data, and it is the case the feature exists for: the query returns entirely plausible per-capita crime rates computed over roughly half the dataset, and nothing else on the page would tell you. The 54% is not a rating — it is the fraction 5,440,343 / 10,071,507.
+
+**It measures the evidence, not the truth.** The score is the share of records this query reads that are present and usable. A city that under-reports a category still scores 100%. The number is therefore never rendered alone — the counts that produced it and the limits on reading it are fields on the same response, and no renderer has a path that emits one without the others.
+
+#### The formula
+
+For each dataset a query reads, three counts:
+
+```
+E   rows the portal holds        (the reference count)
+H   rows held locally
+U   rows held in which every column the query reads carries usable
+    information — not null, and for a timestamp, a date that could be real
+```
+
+The dataset's retention is the share of the intended evidence that survives, and the query's score is the product across its datasets:
+
+```
+completeness = min(1, H/E)     did the rows arrive
+usability    = U/H             do they carry what the query reads
+
+r = completeness × usability             R = ∏ r
+```
+
+That is `U/E` whenever the local copy is no larger than the reference count. It parts company with `U/E` only when a dataset has grown since it was mapped: completeness saturates at 1 rather than exceeding it, so surplus rows cannot pay for a defect elsewhere, and the usable share is then measured against what is actually held rather than a stale denominator. Chicago's contracts are the live case — 185,826 held against a 185,699 reference.
+
+**Every term is a count divided by a count.** No weights, no severity coefficients, no saturation points, no thresholds anywhere in the arithmetic — nothing to tune, and therefore nothing to tune wrongly. Two scores are comparable because they are *the same measurement*, not because two tables of constants happened to agree.
+
+R is not an index. It has a plain reading: **the share of the records the query meant to consult that were actually there and usable.** Chicago's `procurement-type` scores 30% because 55,200 of 185,826 contracts carry every column it reads. NYC's `crime-rate` scores 54% because a count from it rests on 5,440,343 of the 10,071,507 records the portal holds. That sentence is the whole interpretation.
+
+For a query reading **one** dataset — which is all six Chicago corruption queries and NYC's `crime-rate` — that reading is exact: R is U/E. For a query reading several, R is their product, and the product answers a subtly different question: *did every dataset hold up*, not *what share of the pooled records held up*. Two datasets each retaining half give R = 25%, while half of the pooled records did survive. The conjunctive reading is exact for a join, where a row needs every side to be usable, and a lower bound for a union; it is the conservative of the two, which is the right direction for a number whose job is to stop someone over-claiming. Say "every dataset behind this answer" rather than "this share of the records" when R covers more than one.
+
+An earlier version scored eight checks using hand-chosen severity floors and saturation points — about twenty constants, each defensible alone and none of them derived. Six of the eight turned out to be the same measurement wearing different clothes: rows that do not survive. Stating it once removed every constant with it.
+
+**U is measured jointly, not combined.** A row survives when *every* column the query reads is usable — one SQL filter, not one rate per column multiplied together. Nulls in civic data cluster heavily — the same contracts tend to be the thin ones — so assuming independence badly overstates the loss. Over the ten mapped columns of Chicago's contracts, 18.7% of rows carry all ten, while multiplying the per-column rates gives 8.9%: half the surviving evidence, discarded by an assumption. One filter measures it directly.
+
+**What is deliberately not scored.** Freshness and lag are reported beside R, never folded into it. Staleness removes no rows, so it has no reading as evidence loss — and how much 122-day-old data matters depends on the question (fine for a 2023 trend, useless for last week), which csq cannot know. Any coefficient there would be invented, so the age is stated as a fact and left to you. A failed sync is likewise a *diagnostic* explaining a shortfall completeness has already counted: scoring it too would bill the same missing rows twice, and would let a sync that failed at 90% read as having delivered nothing.
+
+**Uncertainty is reported, not averaged in.** A check that could not run is excluded from the product, which makes it indistinguishable from one that cost nothing. So the gap travels *beside* R as **coverage**: the share of scored checks actually performed. Shown only when below 100%.
+
+**What R does not mean.** It measures the evidence, not the truth. A dataset that is complete, current and fully populated scores 100% while recording something other than what you think it records, or recording it with a bias no count can see. R is a ceiling on what can be known from this corpus, never a statement that a finding is correct.
+
+The only remaining constants are presentational: the pass/warn/fail cutoffs and the high/moderate/low/insufficient bands, which choose an adjective for an exact number and take no part in computing it. The plausible-date bounds are definitional — DuckDB's own minimum timestamp, and two days' slack for clock skew.
+
+Two further properties are structural rather than incidental:
+
+- **Only the datasets and columns the query actually reads are examined.** A mode binding three datasets, where the query opens one, is not dragged down by a stale dataset the answer never touches — nor flattered by a pristine one. Chicago's six corruption queries score 100, 94, 30, 100, 100 and 100 over the same three datasets — `top-vendors` reads no `department` column, so the 5.7% of contracts missing one cost it nothing.
+- **Concentration is computed only over the rows returned**, and says so. Inferring a global denominator from a top-N result produces a confidently wrong percentage.
+
+Profiling is one aggregate scan per dataset and is cached for five minutes, so a page running six analyses over the same corpus does not scan it eighteen times. Assessing NYC's 5.4M-row complaint table costs about 30ms. A query that cannot be assessed says "not assessed" rather than rendering a zero — they call for opposite responses from a reader.
+
+`csq modes run` prints the block automatically; `--quiet` suppresses it along with the caveats.
+
+### Investigations
+
+A mode hands you a table. An **investigation** takes a question and returns a verdict, a confidence, the findings behind it, and the reasons the whole thing might be wrong.
+
+```bash
+csq investigate "Is Chicago becoming less transparent about policing?" \
+    --db data.cityofchicago.org.duckdb
+```
+
+That is a much stronger claim to make than "here are your rows", so most of the machinery exists to stop it being made carelessly.
+
+#### A worked example
+
+```bash
+csq modes init police --portal data.cityofchicago.org --output chicago-police.yaml
+csq sync --config chicago-police.yaml --only mft5-nfa8,dpt3-jri9
+csq investigate "Is Chicago becoming less transparent about policing?" \
+    --db data.cityofchicago.org.duckdb
+```
+
+```
+╭───────────────────────────────────╮
+│ CIVIC INVESTIGATION               │
+│ Chicago, IL — Police transparency │
+╰───────────────────────────────────╯
+
+QUESTION
+Is Chicago becoming less transparent about policing?
+
+VERDICT
+Evidence is mixed.
+4 of 4 planned indicators produced a measurement; 3 moved as the plan said
+would support the claim; 1 moved against it.
+
+CONFIDENCE
+100%
+the share of the evidence this investigation set out to consult that was
+present, usable, and reached.
+100% of the records read were present and usable, across 100% of the planned
+indicators.
+Source freshness: 4 days
+
+FINDINGS
+↑ 6% more published complaint cases (2025 vs 2022–2024 mean)
+↓ 39% lower cases with a recorded finding per 100 cases (2023 vs 2020–2022 mean)
+↓ 12% lower cases with a recorded category per 100 cases (2025 vs 2022–2024 mean)
+↓ 11% lower complaints per 1,000 arrests (2025 vs 2022–2024 mean)
+⚠ copa_cases has incomplete 2026 coverage (ends 2026-08-24)
+
+IMPORTANT CAVEATS
+• copa_cases ends 2026-08-24, so 2026 is incomplete and is excluded from
+  every measurement below
+• "Is a smaller share of cases published with a recorded outcome?" reads a
+  field that fills in after the fact, so it is measured only to 2023 — the 2
+  period(s) since are shown and not measured
+• case-publication: a 15% step at 2023 is larger than the 6% movement being
+  reported — read the baseline as spanning a possible change in how this
+  data is produced
+• A falling complaint rate is genuinely ambiguous. It is consistent with
+  better conduct, and equally consistent with a complaint process that has
+  become harder to reach. …
+
+EVIDENCE
+…per-finding series, with each part-period flagged…
+
+REPRODUCE
+Snapshot: chicago-2026-08-30
+csq investigate "Is Chicago becoming less transparent about policing?" --db data.cityofchicago.org.duckdb
+```
+
+That is a real run against Chicago's COPA caseload and arrest record. Three things in it are worth pointing at:
+
+**More cases are published, and less is said about each.** Volume rose 6% while the share carrying a recorded outcome fell 39% and the share carrying a category fell 12%. "Evidence is mixed" is the honest reading, and no single number could have carried it — which is why there is no composite score.
+
+**The outcome indicator is measured to 2023, not 2025.** An open case has no finding yet, so measuring recent years would report the *age* of the caseload as a disclosure failure. The probe declares `SettlesAfter: 2` and the periods inside that window are shown and not measured. The caveat says so rather than leaving a reader to wonder why the series runs further than the finding.
+
+**Confidence is 100% because it should be**, and getting there required a fix worth knowing about. The outcome probe reads `finding_code` precisely in order to count the rows that lack it, and 73% of Chicago's cases lack one. Scored naively as missing evidence, an indicator that read every record it needed reported **7%** confidence. Columns whose emptiness *is* the observation are declared with `MeasuresAbsenceOf` and excluded from the evidence profile — never the period column, since a row with no date is a genuine loss whatever the probe is counting.
+
+The same command against a partially-synced corpus reaches a different and equally honest place:
+
+```
+VERDICT
+Evidence does not support the claim.
+
+CONFIDENCE
+19%
+
+WITHDRAWN UNDER CHALLENGE
+⊘ Are fewer reported offences being published each year?
+  possibly — crimes is 66% short of the portal's count, which is enough to
+  account for a 7% fall on its own
+```
+
+#### Seven steps, in this order
+
+```
+Discover   which investigation the question is asking for, and about where
+Plan       which indicators bear on it, declared before any data is read
+Sync       whether the datasets those indicators need are actually held
+Validate   how far each dataset can be trusted, and where it stops
+Analyze    run the indicators and measure what moved
+Challenge  try to explain each movement away; withdraw what does not survive
+Explain    state the verdict, the confidence, and what would change it
+```
+
+The order is load-bearing rather than decorative:
+
+- **Plan runs before Analyze** so the indicators, and the direction of each that would count as evidence, are fixed before anyone has seen a number. An investigation that picks its indicators after seeing the results is not an investigation, it is an argument. `Supports: Down` is a field in the registry, reviewed like any other code.
+- **Validate runs before Analyze** so a series is never measured past the point where its data stops.
+- **Challenge runs after Analyze** because a finding has to exist before it can be attacked — and the attack is the only thing standing between "records fell 12%" and "the year is not over yet".
+
+#### What it will not do
+
+**It does not write SQL from your question.** Probes are declared in `internal/investigate/`, reviewed like any other code, and expanded through the same concept bindings the modes use. An investigation is portable across cities for the same reason a mode is, and what runs can be read before it runs. A question nothing covers is refused rather than improvised:
+
+```
+No investigation covers that question.
+
+Investigations are curated rather than generated: each one carries
+its own indicators and the caveats they need. csq will not assemble an
+analysis it cannot qualify.
+```
+
+**It does not weigh findings against each other.** A finding survives Challenge or it is withdrawn, and the verdict counts what is left standing. There is no scoring rubric, because any weighting that produced a single number would be an editorial judgement disguised as arithmetic — the same reason the ranking mode refuses to emit a composite city score.
+
+**It does not invent a confidence number.** Confidence is the [confidence score](#confidence-scores) R — the share of records read that were present and usable — multiplied by the share of planned indicators that could be answered:
+
+```
+confidence = R × (indicators answered / indicators planned)
+```
+
+Both factors are counts over counts, so the product keeps a plain reading and introduces no constant: **the share of the evidence this investigation set out to consult that was present, usable, and reached.** An investigation that reads pristine data to answer one of four questions has not earned the confidence of one that answered all four, and multiplying is what says so. When the evidence cannot be profiled at all, the report says "not assessed" rather than showing a zero — the two instruct a reader to do opposite things.
+
+#### The challenges
+
+Each finding is attacked before it is counted. Every attempt is recorded, including the ones the finding survived, because a reader who sees only the successful attacks will assume the rest were never tried.
+
+| Challenge | Asks | Outcome |
+| --- | --- | --- |
+| `partial-period` | Is the fall just a period that has not finished yet? | withdraws |
+| `local-copy-shortfall` | Is the fall really rows missing from your copy? | withdraws |
+| `denominator-moved` | Did the rate move only because its denominator did? | withdraws |
+| `series-break` | Is the series comparable across the window at all? | notes |
+| `sparse-baseline` | Is there enough history behind the baseline? | notes |
+
+A challenge either withdraws a finding or annotates it. Neither applies a numeric penalty, and that is deliberate: scoring a finding down by some fraction because an objection is "partly" valid needs a coefficient nobody can derive, and produces a number that looks measured and is not.
+
+`local-copy-shortfall` is the one that fires most often in practice, and it is a comparison of two measured quantities rather than a judgement. If the share of rows missing from your copy is at least as large as the fall being reported, the missing rows could account for the entire finding, and it cannot be distinguished from a sync artifact:
+
+```
+⊘ Are fewer reported offences being published each year?
+  possibly — crimes is 66% short of the portal's count, which is enough to
+  account for a 7% fall on its own
+```
+
+That is a real result against a partially-synced Chicago corpus. Without the challenge it reads as "Chicago published 7% fewer offence records" — a headline the data does not support.
+
+#### Coverage is measured, not assumed
+
+The single most load-bearing measurement here is where each dataset's record actually begins and ends. Civic data is almost never complete to the day you read it — an extract runs monthly, a department is three weeks behind, a sync caught the portal mid-publish. Charted naively the last period is a cliff, and a cliff is exactly what someone looking for a story about a city hiding its data expects to find.
+
+Both ends are guarded, for the same reason. A dataset beginning in July holds half a first year, and half a year read as a year makes the *following* year look like a surge — the mirror image of the part-finished last year looking like a collapse. Chicago's 311 record starting in December 2018 is exactly this case.
+
+Part-periods are excluded from every measurement and still shown in the series, flagged:
+
+```
+  2024       140,000
+  2025       110,000  (incomplete — excluded from the measurement)
+```
+
+When coverage cannot be measured at all, no period is marked complete and nothing is measured. That is deliberately harsh: an unmeasured extent must never license a measurement.
+
+#### Sync is a step, not a precondition
+
+The honest answer to "is this city becoming less transparent" is sometimes "csq cannot tell you, and here is the one command that would let it". A missing dataset produces that command rather than a binder error, and names only what is actually missing:
+
+```bash
+csq investigate --list --db data.cityofchicago.org.duckdb
+```
+```
+INVESTIGATION        READY  INDICATORS  NOTE
+police-transparency  no     0/4         no indicator can run against the data held;
+                                        missing arrests, copa_cases
+civic-publishing     yes    4/4
+
+To make police-transparency runnable:
+  csq modes init police --portal data.cityofchicago.org --output police.yaml \
+    && csq sync --config police.yaml --only dpt3-jri9,mft5-nfa8
+```
+
+A dataset a portal *does not publish* and one you *have not synced* are reported differently, because they have different remedies and neither should be shown as the other.
+
+#### Reproduction
+
+Every report carries a snapshot key — the city and the date its data was last successfully synced — and the command that produces it again:
+
+```
+REPRODUCE
+Snapshot: chicago-2026-08-28
+csq investigate "Is Chicago publishing fewer records?" --db data.cityofchicago.org.duckdb
+```
+
+Re-running against a corpus carrying the same name should reach the same verdict. Against a different one it legitimately may not: civic portals revise history, and a report that could not say which version of the data it read would be unreproducible in a way nobody would notice.
+
+`--working` prints the plan, every challenge, and the dataset profile; `--sql` prints the statement behind each finding; `--json` emits the whole report, every field above included.
+
+#### Adding one
+
+An investigation is data, like a mode. It names a claim that could turn out to be false, borrows an existing mode's concepts and portal bindings, and declares its probes:
+
+```go
+var policeTransparency = &Investigation{
+    Name:  "police-transparency",
+    Claim: "The city is disclosing less about police accountability than it used to.",
+    Mode:  "police",              // borrows its concepts and every city bound to it
+    Match: []string{"policing", "misconduct", "oversight", ...},
+    Probes: []Probe{{
+        Name:         "case-publication",
+        Asks:         "Are fewer complaint cases reaching the public record each year?",
+        Concept:      "complaints",       // what Validate measures the extent of
+        PeriodColumn: "complaint_date",
+        Supports:     Down,               // declared here, before any data is read
+        SQL:          `SELECT ... FROM {{c:complaints}} GROUP BY period`,
+    }},
+}
+```
+
+A probe returns one row per period: a period, a value, and optionally a denominator. The shape is fixed and narrow because everything downstream reads it — a probe free to return any shape would need an interpreter, and an interpreter is where an investigation starts inventing findings.
+
+Two further fields exist for indicators that measure disclosure rather than volume, and both were added because their absence produced a specific wrong answer:
+
+- `SettlesAfter: 2` — how many periods a record needs before the field being read stops changing. Without it, "what share of cases carry an outcome" reports the age of the caseload as a disclosure failure.
+- `MeasuresAbsenceOf: []string{"finding_code"}` — columns whose emptiness is the observation rather than missing evidence, excluded from the confidence profile. Without it, a probe that counted nulls was scored as though those nulls were evidence it failed to obtain.
+
+Adding a city means adding a *binding* to the underlying mode. No investigation code changes.
+
+Match terms name the **claim**, not the subject matter. Routing weights each term by how few investigations claim it — measured over the registry rather than chosen, so adding an investigation re-weights the vocabulary automatically — which means a bare topic word like "potholes" would score as though it were diagnostic and send "how many potholes will there be next year?" to an investigation answering a different question about the same noun. When two investigations match equally well, csq asks rather than guessing: guessing produces a confident, fully caveated verdict about the wrong question, and nothing in the output would look wrong.
+
+### Chart the JSON
+
+`scripts/csq-graph.py` turns csq's JSON into a self-contained HTML page of charts. It reads either JSON csq emits — a mode result from `/export/<mode>/<query>.json`, or the row objects from `csq query --format json` — and needs no dependencies, no toolchain, and no network: the page it writes is a single file with its own SVG and no third-party JavaScript.
+
+```bash
+./csq query --db data.cityofchicago.org.duckdb --format json \
+  "SELECT ward, COUNT(*) AS complaints FROM ... GROUP BY 1 ORDER BY 2 DESC" \
+  | python3 scripts/csq-graph.py - --open
+
+# or chart what the page exported
+python3 scripts/csq-graph.py ranking-per_capita.json corruption-vendors.json -o charts.html
+```
+
+The rules deciding *whether* a result is drawn are the ones `internal/web/chart.go` already applies: one text column to name the marks, one numeric column to size them, and a `city` column splits them into series. A result that meets none of them renders as a table with the reason printed above it — "3 text columns (dataset, column, problem), so there is no single thing the marks would name" — because a reader who sees no chart should not have to guess whether it is missing or was refused. `--label`, `--value` and `--series` override the choice when you know better; `--top` sets how many rows are drawn.
+
+Three properties are deliberate rather than incidental:
+
+- **Caveats travel with the figure.** The caveats, the excluded cities, the truncation flag and the confidence report render above every chart, and there is no code path that draws one without them — the same property the CSV and JSON exports hold, for the same reason.
+- **Every figure carries its table.** Not only as an accessibility fallback: the chart abbreviates a long number to `184.3M`, and the table and the hover tooltip are where the full `184,320,991` stays reachable.
+- **A chart it cannot draw honestly, it does not draw.** Several numeric columns of different units become one measure plus a table, never a dual-axis chart; more than eight series stays a table; and a line chart whose axis starts above zero says so under the chart.
+
+#### Designed, not implemented: a livability index
+
+`ranking` deliberately emits no overall score, on the grounds that crime,
+service responsiveness, and construction do not add up to anything. The obvious
+follow-up — *can an honest composite be built at all?* — has a design in
+[docs/superpowers/specs/2026-08-28-livability-index-design.md](./docs/superpowers/specs/2026-08-28-livability-index-design.md).
+
+Its answer is to stop hiding the weighting and start measuring it. Report rank
+*intervals* over 10,000 sampled weightings instead of a point rank, and publish
+a point rank only where the interval collapses. Publish the dominance partial
+order separately, since those are the only claims that survive every weighting.
+Gate on affordability before scoring, so amenity cannot buy past a budget. And
+score each domain on its 10th-percentile neighbourhood as well as its median,
+because life expectancy varies by decades *within* Chicago (`qjr3-bm53`) — a
+wider spread than sits between most pairs of cities.
+
+Nothing in that document is built. It also concludes that roughly half of what
+makes a city livable — commute time, transit access, income mobility, school
+quality, childcare cost — is not on a Socrata portal at all, so an honest index
+would require csq to grow a non-Socrata reference-data path.
 
 ### Serve via MCP
 
@@ -171,6 +758,12 @@ internal/config/      # YAML loader + per-dataset effective config
 internal/sync/        # Sync orchestrator + strategies (FullReplace, Incremental)
 internal/mcpserver/   # MCP server: pools, ATTACH, tools, transports
 internal/snapshot/    # Snapshot publishing: tar+zst format, Pack producer, Fetch consumer
+internal/modes/       # Curated analysis profiles: datasets, queries, caveats
+internal/analysis/    # Headless mode execution: planning, exclusions, readiness
+internal/confidence/  # Data-fitness scoring: dataset profiling, signals, caps
+internal/investigate/ # Investigations: routing, probes, challenges, verdicts
+internal/web/         # Browser UI: JSON API, embedded assets, HTML reports
+scripts/              # Standalone helpers: csq-graph.py charts exported JSON
 ```
 
 ## License

@@ -33,6 +33,28 @@ Usage:
   csq fetch    (--from <url> | --index <url> [--snapshot <id>]) [--output <path>] [--no-verify] [--force]
   csq snapshot-index update --index <path> --add <tarball> --url <url> [--max-keep N]
   csq snapshot-index validate --index <path>
+  csq modes    [show|init|run] <mode> [options]
+  csq investigate "<question>" --db <portal.duckdb> [--working] [--sql] [--json]
+  csq query    --db <portal.duckdb> [--db ...] [--format csv|json|parquet] <SQL>
+  csq web      --db <portal.duckdb> [--db ...] [--config <yaml> ...] [--addr ADDR] [--open]
+
+Modes — curated analysis profiles, ready to sync and query:
+  corruption   Contract concentration, lobbying spend, and political contributions
+  ranking      Compare cities on crime, 311 responsiveness, and permit activity
+  police       Complaints against police, oversight findings, and how they resolve
+  research     Audit what you hold, where it came from, and which columns to distrust
+  personal     Your own mode, built from a question you ask in English
+
+  Start with 'csq modes' to list them, or 'csq modes show <mode>' for the
+  datasets, queries, and interpretation caveats each one carries.
+
+Investigations — ask a question, get a verdict and its working:
+  csq investigate "Is Chicago becoming less transparent about policing?" \
+      --db data.cityofchicago.org.duckdb
+
+  Seven steps in order — discover, plan, sync, validate, analyze, challenge,
+  explain. 'csq investigate --list --db <file>' shows which can run on your
+  data and what to sync for the rest.
 
 All subcommands except 'fetch' acquire <dbpath>.lock (advisory flock).
 Pass --no-lock to bypass or --lock-wait <duration> to retry.
@@ -45,6 +67,12 @@ Examples:
   csq mcp      --db data.cityofchicago.org.duckdb --config data.cityofchicago.org.yaml
   csq snapshot --db data.cityofchicago.org.duckdb --output chicago-2026-04-28.tar.zst
   csq fetch    --from https://example.com/snapshots/chicago-2026-04-28.tar.zst
+  csq modes    show police
+  csq modes    init police --output police.yaml
+  csq modes    run  police --db data.cityofchicago.org.duckdb --query finding-outcomes
+  csq web      --db data.cityofchicago.org.duckdb --open
+
+Not a terminal person? 'csq web' opens the same analyses in a browser.
 `
 
 func main() {
@@ -56,6 +84,11 @@ func main() {
 	case "extract":
 		if err := runExtract(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "csq extract: %v\n", err)
+			os.Exit(1)
+		}
+	case "web":
+		if err := runWeb(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq web: %v\n", err)
 			os.Exit(1)
 		}
 	case "catalog":
@@ -86,6 +119,21 @@ func main() {
 	case "snapshot-index":
 		if err := runSnapshotIndex(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "csq snapshot-index: %v\n", err)
+			os.Exit(1)
+		}
+	case "modes", "mode":
+		if err := runModes(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq modes: %v\n", err)
+			os.Exit(1)
+		}
+	case "investigate":
+		if err := runInvestigate(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq investigate: %v\n", err)
+			os.Exit(1)
+		}
+	case "query":
+		if err := runQuery(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "csq query: %v\n", err)
 			os.Exit(1)
 		}
 	case "-h", "--help", "help":
