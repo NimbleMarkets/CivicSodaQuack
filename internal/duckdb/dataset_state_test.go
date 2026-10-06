@@ -35,6 +35,7 @@ func TestDatasetState_UpsertRoundTrip(t *testing.T) {
 	in := DatasetState{
 		DatasetID:         "aaaa-0001",
 		HWMUpdatedAt:      &hwm,
+		HWMID:             "row-abc",
 		LastFullReplaceAt: &full,
 		LastRunID:         "01HXYZ",
 		HWMColumn:         ":updated_at",
@@ -52,6 +53,9 @@ func TestDatasetState_UpsertRoundTrip(t *testing.T) {
 	}
 	if !got.HWMUpdatedAt.Equal(hwm) {
 		t.Errorf("hwm: got %v, want %v", got.HWMUpdatedAt, hwm)
+	}
+	if got.HWMID != "row-abc" {
+		t.Errorf("hwm_id: got %q, want row-abc", got.HWMID)
 	}
 	if got.LastRunID != "01HXYZ" || got.HWMColumn != ":updated_at" {
 		t.Errorf("got %+v", got)
@@ -106,5 +110,39 @@ func TestDatasetState_NullableHWM(t *testing.T) {
 	}
 	if got.HWMUpdatedAt != nil {
 		t.Errorf("want nil HWM, got %v", got.HWMUpdatedAt)
+	}
+}
+
+// A database created before hwm_id existed gains the column on the next Apply,
+// keeps its rows, and reads them back with an empty cursor id.
+func TestApply_AddsHWMIDToExistingDatasetState(t *testing.T) {
+	w, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	for _, q := range []string{
+		`DROP TABLE _csq.dataset_state`,
+		`CREATE TABLE _csq.dataset_state (
+			dataset_id VARCHAR PRIMARY KEY, hwm_updated_at TIMESTAMP,
+			last_full_replace_at TIMESTAMP, last_run_id VARCHAR, hwm_column VARCHAR NOT NULL)`,
+		`INSERT INTO _csq.dataset_state VALUES ('aaaa-0001', TIMESTAMP '2026-04-22 12:00:00', NULL, 'r1', ':updated_at')`,
+	} {
+		if _, err := w.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Apply(w.DB); err != nil {
+		t.Fatalf("apply on old schema: %v", err)
+	}
+	if err := Apply(w.DB); err != nil {
+		t.Fatalf("apply is not idempotent: %v", err)
+	}
+	got, err := w.ReadDatasetState("aaaa-0001")
+	if err != nil || got == nil {
+		t.Fatalf("read: %v %v", got, err)
+	}
+	if got.HWMID != "" || got.LastRunID != "r1" {
+		t.Errorf("legacy row: %+v", got)
 	}
 }

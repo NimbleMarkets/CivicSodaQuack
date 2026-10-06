@@ -98,18 +98,14 @@ func newFakeSocrata(t *testing.T, datasets ...fakeDataset) *httptest.Server {
 		// Apply $where filter if present
 		filtered := d.Rows
 		if whereClause != "" {
-			cutoff, ok := parseSimpleGreaterThan(whereClause)
+			match, ok := parseWhere(whereClause)
 			if !ok {
 				http.Error(w, "fake portal: unsupported $where: "+whereClause, 400)
 				return
 			}
 			filtered = filtered[:0:0]
 			for _, row := range d.Rows {
-				ts, ok := row[":updated_at"].(string)
-				if !ok {
-					continue
-				}
-				if ts >= cutoff { // string compare on ISO-8601 is order-preserving
+				if match(row) {
 					filtered = append(filtered, row)
 				}
 			}
@@ -184,18 +180,40 @@ func makeRows(n int, mk func(i int) map[string]any) []map[string]any {
 	return out
 }
 
-// parseSimpleGreaterThan recognises the single Phase 2 predicate shape:
+var (
+	simpleWhereRE = regexp.MustCompile(`^\s*([A-Za-z_:][A-Za-z0-9_:]*)\s*(>=?)\s*'([^']*)'\s*$`)
+	cursorWhereRE = regexp.MustCompile(`^\s*\(\s*([A-Za-z_:][A-Za-z0-9_:]*)\s*>\s*'([^']*)'\s*\)\s+OR\s+\(\s*([A-Za-z_:][A-Za-z0-9_:]*)\s*=\s*'([^']*)'\s+AND\s+:id\s*>\s*'((?:[^']|'')*)'\s*\)\s*$`)
+)
+
+// parseWhere recognises the two predicate shapes the incremental strategy
+// sends and returns a row matcher; string comparison on ISO-8601 timestamps is
+// order-preserving.
 //
-//	<col> >= '<value>'  (with surrounding whitespace ignored)
-//
-// Returns the value if matched. Anything else returns ok=false.
-func parseSimpleGreaterThan(where string) (string, bool) {
-	re := regexp.MustCompile(`^\s*[A-Za-z_:][A-Za-z0-9_:]*\s*>=?\s*'([^']*)'\s*$`)
-	m := re.FindStringSubmatch(where)
-	if m == nil {
-		return "", false
+//	<col> >= '<ts>'  (or >)                                 legacy resume
+//	(<col> > '<ts>') OR (<col> = '<ts>' AND :id > '<id>')   (timestamp, id) cursor
+func parseWhere(where string) (func(map[string]any) bool, bool) {
+	if m := cursorWhereRE.FindStringSubmatch(where); m != nil && m[1] == m[3] && m[2] == m[4] {
+		col, ts, id := m[1], m[2], strings.ReplaceAll(m[5], "''", "'")
+		return func(row map[string]any) bool {
+			rts, _ := row[col].(string)
+			rid, _ := row[":id"].(string)
+			return rts > ts || (rts == ts && rid > id)
+		}, true
 	}
-	return m[1], true
+	if m := simpleWhereRE.FindStringSubmatch(where); m != nil {
+		col, op, cutoff := m[1], m[2], m[3]
+		return func(row map[string]any) bool {
+			rts, ok := row[col].(string)
+			if !ok {
+				return false
+			}
+			if op == ">=" {
+				return rts >= cutoff
+			}
+			return rts > cutoff
+		}, true
+	}
+	return nil, false
 }
 
 func itoa(i int) string {

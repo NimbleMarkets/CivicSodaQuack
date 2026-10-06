@@ -132,7 +132,7 @@ func (s *IncrementalStrategy) bootstrap(
 	}
 
 	var rowsWritten int64
-	var maxHWM *time.Time
+	var cur resumeCursor
 	err = client.StreamRowsCtx(ctx, s.scheme(), s.Portal, target.ID,
 		orderBy, target.Effective.Where, ":*,*",
 		target.Effective.Limit,
@@ -141,11 +141,7 @@ func (s *IncrementalStrategy) bootstrap(
 				return err
 			}
 			for _, row := range page {
-				if t := extractRowHWM(row, hwmCol); t != nil {
-					if maxHWM == nil || t.After(*maxHWM) {
-						maxHWM = t
-					}
-				}
+				cur.observe(row, hwmCol)
 			}
 			rowsWritten += int64(len(page))
 			prog.DatasetProgress(idx, total, target, rowsWritten)
@@ -166,7 +162,8 @@ func (s *IncrementalStrategy) bootstrap(
 	now := time.Now().UTC()
 	stateRow := duckdb.DatasetState{
 		DatasetID:         target.ID,
-		HWMUpdatedAt:      maxHWM,
+		HWMUpdatedAt:      cur.ts,
+		HWMID:             cur.id,
 		LastFullReplaceAt: &now,
 		LastRunID:         s.RunID,
 		HWMColumn:         hwmCol,
@@ -218,15 +215,12 @@ func (s *IncrementalStrategy) delta(
 		return failResult(target, "failed", schemaDriftError(target.Effective.Table, diffs)), nil
 	}
 
-	// Build $where = "<hwm> >= 'TS'", AND-combined with target.Effective.Where if set.
-	// Non-strict `>=`: the checkpoint is the max timestamp seen, and a run cut
-	// short by an error, cancellation, or a row limit may have fetched only some
-	// of the rows sharing that timestamp. Re-reading them is harmless because
-	// writes are PK upserts.
-	whereClause := ""
-	if state.HWMUpdatedAt != nil {
-		whereClause = fmt.Sprintf("%s >= '%s'", hwmCol, state.HWMUpdatedAt.UTC().Format("2006-01-02T15:04:05.000"))
-	}
+	// Resume strictly after the (hwm, :id) cursor, AND-combined with
+	// target.Effective.Where if set. See resumeCursor.where for why the :id
+	// matters: a run cut short by an error, cancellation or a row limit may
+	// have consumed only some of the rows sharing the checkpoint timestamp.
+	cur := resumeCursor{ts: state.HWMUpdatedAt, id: state.HWMID}
+	whereClause := cur.where(hwmCol)
 	if target.Effective.Where != "" {
 		if whereClause != "" {
 			whereClause = "(" + whereClause + ") AND (" + target.Effective.Where + ")"
@@ -235,14 +229,13 @@ func (s *IncrementalStrategy) delta(
 		}
 	}
 
-	// Always order by the checkpoint column, then :id for stable pagination
-	// within a timestamp. The configured order_by (default ":id") is ignored
-	// here: checkpointing max(hwm) is only a valid resume point when rows are
-	// consumed in hwm order, so any prefix of the stream is a prefix of time.
+	// Always order by the cursor, (checkpoint column, :id). The configured
+	// order_by (default ":id") is ignored here: the checkpoint is only a valid
+	// resume point when rows are consumed in cursor order, so any prefix of the
+	// stream is a prefix of that order.
 	orderBy := hwmCol + ",:id"
 
 	var rowsWritten int64
-	maxHWM := state.HWMUpdatedAt
 	pageIdx := 0
 	err = client.StreamRowsCtx(ctx, s.scheme(), s.Portal, target.ID,
 		orderBy, whereClause, ":*,*", target.Effective.Limit,
@@ -251,11 +244,7 @@ func (s *IncrementalStrategy) delta(
 				return err
 			}
 			for _, row := range page {
-				if t := extractRowHWM(row, hwmCol); t != nil {
-					if maxHWM == nil || t.After(*maxHWM) {
-						maxHWM = t
-					}
-				}
+				cur.observe(row, hwmCol)
 			}
 			rowsWritten += int64(len(page))
 			pageIdx++
@@ -266,7 +255,8 @@ func (s *IncrementalStrategy) delta(
 				// HWM-on-success write will catch up.
 				_ = w.UpsertDatasetState(duckdb.DatasetState{
 					DatasetID:         target.ID,
-					HWMUpdatedAt:      maxHWM,
+					HWMUpdatedAt:      cur.ts,
+					HWMID:             cur.id,
 					LastFullReplaceAt: state.LastFullReplaceAt,
 					LastRunID:         s.RunID,
 					HWMColumn:         hwmCol,
@@ -284,7 +274,8 @@ func (s *IncrementalStrategy) delta(
 	}
 
 	// Stream succeeded — persist new HWM (preserving last_full_replace_at).
-	state.HWMUpdatedAt = maxHWM
+	state.HWMUpdatedAt = cur.ts
+	state.HWMID = cur.id
 	state.LastRunID = s.RunID
 	if err := w.UpsertDatasetState(*state); err != nil {
 		// Mirror bootstrap behavior: data is in main; surface as failed-state-write.
@@ -315,6 +306,48 @@ func schemaDriftError(table string, diffs []duckdb.SchemaDiff) error {
 	}
 	return fmt.Errorf("schema drift on %s: %s; set mode: full_replace in YAML to rebootstrap",
 		table, strings.Join(parts, ", "))
+}
+
+// resumeCursor is the (timestamp, :id) position of the last row consumed in
+// cursor order. The timestamp alone cannot be a resume point: rows often share
+// one (a bulk load stamps every row identically), so resuming at "timestamp >="
+// restarts at the first of them, and a row limit smaller than the tie would
+// reprocess the same rows forever. Adding :id makes the position unique.
+type resumeCursor struct {
+	ts *time.Time
+	id string // "" when unknown, e.g. state written before hwm_id existed
+}
+
+// observe advances the cursor to row if row is later in (timestamp, :id) order.
+func (c *resumeCursor) observe(row socrata.Row, hwmCol string) {
+	t := extractRowHWM(row, hwmCol)
+	if t == nil {
+		return
+	}
+	id, _ := row[":id"].(string)
+	switch {
+	case c.ts == nil || t.After(*c.ts):
+	case t.Equal(*c.ts) && id > c.id:
+	default:
+		return
+	}
+	c.ts, c.id = t, id
+}
+
+// where returns the $where clause that selects rows strictly after the cursor,
+// or "" when there is no cursor yet. Without an :id (state from before hwm_id)
+// it falls back to "timestamp >=", which re-reads the ties; writes are PK
+// upserts, so that is only wasted work.
+func (c resumeCursor) where(hwmCol string) string {
+	if c.ts == nil {
+		return ""
+	}
+	ts := c.ts.UTC().Format("2006-01-02T15:04:05.000")
+	if c.id == "" {
+		return fmt.Sprintf("%s >= '%s'", hwmCol, ts)
+	}
+	id := strings.ReplaceAll(c.id, "'", "''")
+	return fmt.Sprintf("(%s > '%s') OR (%s = '%s' AND :id > '%s')", hwmCol, ts, hwmCol, ts, id)
 }
 
 func extractRowHWM(row socrata.Row, hwmCol string) *time.Time {

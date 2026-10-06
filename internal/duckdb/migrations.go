@@ -7,8 +7,9 @@ import (
 	"fmt"
 )
 
-// Apply creates the _csq and _csq_staging schemas and the _csq.catalog and
-// _csq.sync_runs tables if they do not already exist. Safe to run repeatedly.
+// Apply creates the _csq and _csq_staging schemas and the _csq.catalog,
+// _csq.sync_runs and _csq.dataset_state tables if they do not already exist,
+// and adds columns introduced since. Safe to run repeatedly.
 func Apply(db *sql.DB) error {
 	stmts := []string{
 		`CREATE SCHEMA IF NOT EXISTS _csq`,
@@ -45,6 +46,10 @@ func Apply(db *sql.DB) error {
 			last_run_id          VARCHAR,
 			hwm_column           VARCHAR NOT NULL
 		)`,
+		// hwm_id completes the (hwm_updated_at, :id) resume cursor. Databases
+		// created before it have NULL, which makes delta sync fall back to a
+		// timestamp-only (>=) resume for one run.
+		`ALTER TABLE _csq.dataset_state ADD COLUMN IF NOT EXISTS hwm_id VARCHAR`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {

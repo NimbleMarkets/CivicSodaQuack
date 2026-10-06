@@ -586,3 +586,84 @@ func TestIncremental_UsesEffectiveBatchSize(t *testing.T) {
 		t.Errorf("shared client mutated: %d", shared.BatchSize)
 	}
 }
+
+// Rows that share an update timestamp (a bulk load) must still be consumed when
+// a row limit is smaller than the tie: the cursor is (timestamp, :id), not just
+// the timestamp.
+func TestIncremental_LimitedDeltaAdvancesThroughSameTimestampRows(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	const ts = "2026-04-22T00:00:00.000"
+	rows := []map[string]any{
+		{":id": "row-a", ":updated_at": ts, "score": float64(1)},
+		{":id": "row-b", ":updated_at": ts, "score": float64(2)},
+		{":id": "row-c", ":updated_at": ts, "score": float64(3)},
+	}
+	cols := []map[string]string{{"fieldName": "score", "dataTypeName": "number"}}
+	sync := func(runID string) DatasetResult {
+		ds := fakeDataset{ID: "aaaa-0001", Name: "Ds", Columns: cols, Rows: rows}
+		srv := newFakeSocrata(t, ds)
+		client := &socrata.Client{BatchSize: 10}
+		strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: runID}
+		target := DatasetTarget{ID: ds.ID, Effective: config.Effective{
+			DatasetID: ds.ID, Table: "crimes", BatchSize: 10, Limit: 1,
+		}}
+		res, _ := strat.Sync(context.Background(), target, client, w, &RecordingReporter{}, 1, 1)
+		return res
+	}
+	count := func() int {
+		var n int
+		_ = w.DB.QueryRow(`SELECT COUNT(*) FROM main.crimes`).Scan(&n)
+		return n
+	}
+
+	for i, want := range []int{1, 2, 3, 3} { // bootstrap, then three deltas
+		if res := sync("run" + itoa(i)); res.Status != "ok" {
+			t.Fatalf("run %d: %v", i, res.Err)
+		}
+		if got := count(); got != want {
+			t.Fatalf("after run %d: %d rows stored, want %d", i, got, want)
+		}
+	}
+}
+
+// State written before hwm_id existed has no :id; the first delta falls back to
+// a timestamp-only (>=) resume and then records a full cursor.
+func TestIncremental_LegacyStateResumesWithGEThenStoresCursor(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	boot := mkIncrDataset("aaaa-0001", 2, "2026-04-22")
+	if res := runIncr(t, boot, w, "run1", nil, ""); res.Status != "ok" {
+		t.Fatalf("bootstrap: %v", res.Err)
+	}
+	state, _ := w.ReadDatasetState("aaaa-0001")
+	if state.HWMID == "" {
+		t.Fatal("bootstrap should record the cursor id")
+	}
+	state.HWMID = "" // simulate a database that predates hwm_id
+	if err := w.UpsertDatasetState(*state); err != nil {
+		t.Fatal(err)
+	}
+
+	var wheres []string
+	boot.OnResource = func(r *http.Request) { wheres = append(wheres, r.URL.Query().Get("$where")) }
+	if res := runIncr(t, boot, w, "run2", nil, ""); res.Status != "ok" {
+		t.Fatalf("delta: %v", res.Err)
+	}
+	if len(wheres) == 0 || !strings.Contains(wheres[0], " >= '") || strings.Contains(wheres[0], ":id >") {
+		t.Errorf("legacy resume should use >=, got %q", wheres)
+	}
+	state, _ = w.ReadDatasetState("aaaa-0001")
+	if state.HWMID == "" {
+		t.Error("delta should store the full cursor")
+	}
+
+	// And with a full cursor a caught-up dataset reads nothing.
+	wheres = nil
+	res := runIncr(t, boot, w, "run3", nil, "")
+	if res.Status != "ok" || res.RowsWritten != 0 {
+		t.Errorf("caught-up delta: status=%q rows=%d err=%v, want ok/0", res.Status, res.RowsWritten, res.Err)
+	}
+}
