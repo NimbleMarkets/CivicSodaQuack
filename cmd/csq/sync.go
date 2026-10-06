@@ -108,6 +108,9 @@ func runSync(args []string) error {
 		FullRefreshAll: fullRefreshAll,
 	})
 	if dryRun {
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(os.Stderr, "[csq] dry-run: would sync %d datasets\n", summary.Planned)
 		return nil
 	}

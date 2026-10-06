@@ -212,6 +212,37 @@ func TestCSQ_IncrementalSmoke(t *testing.T) {
 	}
 }
 
+// A dry run that cannot fetch the catalog must fail, not print "would sync 0".
+func TestCSQ_DryRunSurfacesCatalogError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "portal.yaml")
+	tpl, err := os.ReadFile("testdata/portal.yaml.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	yaml := strings.ReplaceAll(string(tpl), "{{HOST}}", strings.TrimPrefix(srv.URL, "http://"))
+	yaml = strings.ReplaceAll(yaml, "{{DB}}", filepath.Join(dir, "x.duckdb"))
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Getenv("CSQ_BIN"), "sync", "--config", cfgPath, "--dry-run")
+	cmd.Env = append(os.Environ(), "CSQ_SCHEME=http")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("dry-run should fail when the catalog fetch fails; stderr:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "would sync 0 datasets") {
+		t.Errorf("dry-run reported success despite the error:\n%s", stderr.String())
+	}
+}
+
 func TestCSQ_MCP_Stdio_Smoke(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "smoke.duckdb")
