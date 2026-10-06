@@ -26,11 +26,26 @@ type DatasetSummary struct {
 	Category  string `json:"category,omitempty"`
 	TableName string `json:"table_name"`
 	RowCount  *int64 `json:"row_count,omitempty"`
+
+	synced bool // table_name came from a successful sync, so RowCount can be filled
 }
 
 // ListDatasets enumerates datasets across the requested portal (or all
 // portals) with optional category substring filter.
 func ListDatasets(ctx context.Context, p *Pools, args ListDatasetsArgs) ([]DatasetSummary, error) {
+	out, err := listDatasetSummaries(ctx, p, args)
+	if err != nil {
+		return nil, err
+	}
+	if err := fillRowCounts(ctx, p, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// listDatasetSummaries is ListDatasets without row counts, which cost a table
+// count per dataset. Callers that filter further (search) fill counts after.
+func listDatasetSummaries(ctx context.Context, p *Pools, args ListDatasetsArgs) ([]DatasetSummary, error) {
 	aliases := selectPortals(p, args.Portal)
 	out := make([]DatasetSummary, 0, len(aliases)*4)
 
@@ -78,10 +93,10 @@ func selectPortals(p *Pools, requested string) []string {
 	return out
 }
 
-// queryDatasetsForPortal returns all dataset summaries from one portal pool.
-// table_name comes from the most recent status='ok' sync_runs row (falling back
-// to replace(id, '-', '_') when none exists); row_count is the live count of
-// that table, not the size of the last sync batch.
+// queryDatasetsForPortal returns all dataset summaries from one portal pool,
+// without row counts (see fillRowCounts). table_name comes from the most recent
+// status='ok' sync_runs row, falling back to replace(id, '-', '_') when none
+// exists.
 func queryDatasetsForPortal(ctx context.Context, db *sql.DB, alias string) ([]DatasetSummary, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT c.id, c.name, COALESCE(c.category, ''), s.table_name
@@ -100,7 +115,6 @@ func queryDatasetsForPortal(ctx context.Context, db *sql.DB, alias string) ([]Da
 	defer rows.Close()
 
 	var out []DatasetSummary
-	var synced []string
 	for rows.Next() {
 		var id, name, category string
 		var table sql.NullString
@@ -112,6 +126,7 @@ func queryDatasetsForPortal(ctx context.Context, db *sql.DB, alias string) ([]Da
 			Portal:    alias,
 			Name:      name,
 			Category:  category,
+			synced:    table.Valid,
 		}
 		if table.Valid {
 			summary.TableName = table.String
@@ -119,30 +134,32 @@ func queryDatasetsForPortal(ctx context.Context, db *sql.DB, alias string) ([]Da
 			summary.TableName = strings.ReplaceAll(id, "-", "_")
 		}
 		out = append(out, summary)
-		if table.Valid {
-			synced = append(synced, table.String)
-		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows.Close()
-
-	counts, err := duckdb.CountMainTables(ctx, db, synced)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		if !hasCount(counts, out[i].TableName) {
-			continue
-		}
-		n := counts[out[i].TableName]
-		out[i].RowCount = &n
-	}
-	return out, nil
+	return out, rows.Err()
 }
 
-func hasCount(counts map[string]int64, table string) bool {
-	_, ok := counts[table]
-	return ok
+// fillRowCounts sets RowCount on each synced summary to its table's live row
+// count, one batched lookup per portal. Summaries whose table does not exist
+// keep a nil RowCount.
+func fillRowCounts(ctx context.Context, p *Pools, ds []DatasetSummary) error {
+	tablesByPortal := map[string][]string{}
+	for _, d := range ds {
+		if d.synced {
+			tablesByPortal[d.Portal] = append(tablesByPortal[d.Portal], d.TableName)
+		}
+	}
+	countsByPortal := make(map[string]map[string]int64, len(tablesByPortal))
+	for alias, tables := range tablesByPortal {
+		counts, err := duckdb.CountMainTables(ctx, p.Portals[alias].DB, tables)
+		if err != nil {
+			return fmt.Errorf("count %s: %w", alias, err)
+		}
+		countsByPortal[alias] = counts
+	}
+	for i := range ds {
+		if n, ok := countsByPortal[ds[i].Portal][ds[i].TableName]; ok && ds[i].synced {
+			ds[i].RowCount = &n
+		}
+	}
+	return nil
 }

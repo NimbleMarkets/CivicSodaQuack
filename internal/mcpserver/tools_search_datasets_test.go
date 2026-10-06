@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSearch_NameSubstring(t *testing.T) {
@@ -101,5 +102,33 @@ func TestSearch_MultiWordEveryWordMustMatch(t *testing.T) {
 		if strings.Join(g, ",") != strings.Join(want, ",") {
 			t.Errorf("%q: got %v, want %v", q, g, want)
 		}
+	}
+}
+
+// Counting is deferred until after matching, but matches must still carry
+// their live row counts.
+func TestSearch_MatchesCarryRowCounts(t *testing.T) {
+	hwm := time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC)
+	pools, cleanup := openFixturePools(t,
+		FixtureDataset{
+			ID: "aaaa-0001", Name: "Chicago Crimes", TableName: "aaaa_0001",
+			ColumnDefs: []string{"socrata_id VARCHAR"},
+			Rows:       []map[string]any{{"socrata_id": "a"}, {"socrata_id": "b"}},
+			Synced:     true, HWM: hwm,
+		},
+		FixtureDataset{
+			ID: "bbbb-0002", Name: "Park Events", TableName: "bbbb_0002",
+			ColumnDefs: []string{"socrata_id VARCHAR"},
+			Rows:       []map[string]any{{"socrata_id": "x"}},
+			Synced:     true, HWM: hwm,
+		})
+	defer cleanup()
+
+	got, err := SearchDatasets(context.Background(), pools, SearchDatasetsArgs{Query: "crimes"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("search: %v %v", got, err)
+	}
+	if got[0].RowCount == nil || *got[0].RowCount != 2 {
+		t.Errorf("row_count: got %v, want 2", got[0].RowCount)
 	}
 }

@@ -27,7 +27,9 @@ func SearchDatasets(ctx context.Context, p *Pools, args SearchDatasetsArgs) ([]D
 	if len(words) == 0 {
 		return nil, fmt.Errorf("query must not be empty")
 	}
-	all, err := ListDatasets(ctx, p, ListDatasetsArgs{Portal: args.Portal})
+	// Summaries without row counts: counting every table before filtering would
+	// cost a count per dataset; only the matches get counted, below.
+	all, err := listDatasetSummaries(ctx, p, ListDatasetsArgs{Portal: args.Portal})
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +60,9 @@ func SearchDatasets(ctx context.Context, p *Pools, args SearchDatasetsArgs) ([]D
 		if matched {
 			out = append(out, d)
 		}
+	}
+	if err := fillRowCounts(ctx, p, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
