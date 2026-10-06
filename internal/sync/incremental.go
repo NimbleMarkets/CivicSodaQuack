@@ -40,6 +40,10 @@ func (s *IncrementalStrategy) Sync(
 	prog ProgressReporter,
 	idx, total int,
 ) (DatasetResult, error) {
+	// The effective batch_size (defaults plus per-dataset override) applies to
+	// this dataset only; copy rather than mutate the client shared by workers.
+	client = client.WithBatchSize(target.Effective.BatchSize)
+
 	state, err := w.ReadDatasetState(target.ID)
 	if err != nil {
 		return failResult(target, "failed", fmt.Errorf("read dataset_state: %w", err)), nil

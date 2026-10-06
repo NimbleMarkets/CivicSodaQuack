@@ -22,6 +22,8 @@ type fakeDataset struct {
 	Rows    []map[string]any
 	// FailAtOffset: if > 0, return 500 when $offset >= FailAtOffset
 	FailAtOffset int
+	// OnResource, if set, sees every /resource request (for asserting params).
+	OnResource func(r *http.Request)
 }
 
 func newFakeSocrata(t *testing.T, datasets ...fakeDataset) *httptest.Server {
@@ -77,6 +79,9 @@ func newFakeSocrata(t *testing.T, datasets ...fakeDataset) *httptest.Server {
 		if !ok {
 			http.Error(w, "not found", 404)
 			return
+		}
+		if d.OnResource != nil {
+			d.OnResource(r)
 		}
 		q := r.URL.Query()
 		offset, _ := strconv.Atoi(q.Get("$offset"))

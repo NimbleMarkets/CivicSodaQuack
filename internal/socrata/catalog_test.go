@@ -3,6 +3,7 @@
 package socrata
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ func TestFetchCatalog_Paginates(t *testing.T) {
 
 	host := strings.TrimPrefix(srv.URL, "http://")
 	c := &Client{BatchSize: pageSize}
-	entries, err := c.fetchCatalogScheme(host, "http")
+	entries, err := c.FetchCatalogCtx(context.Background(), host, "http")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}

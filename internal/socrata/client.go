@@ -23,11 +23,27 @@ type Client struct {
 	RetryWait  time.Duration // initial backoff; 0 → 1s
 }
 
+// defaultHTTPClient backs a zero-value Client. http.DefaultClient has no
+// timeout, so a stalled portal would hang a request forever when the caller's
+// context has no deadline.
+var defaultHTTPClient = &http.Client{Timeout: 5 * time.Minute}
+
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return defaultHTTPClient
+}
+
+// WithBatchSize returns a copy of c that pages n rows at a time (n <= 0 keeps
+// c's setting). The copy lets each dataset use its own effective batch size
+// without mutating a client shared by concurrent workers.
+func (c *Client) WithBatchSize(n int) *Client {
+	cp := *c
+	if n > 0 {
+		cp.BatchSize = n
+	}
+	return &cp
 }
 
 func (c *Client) batchSize() int {

@@ -3,6 +3,7 @@
 package socrata
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,17 +36,20 @@ var catalogTimestampLayouts = []string{
 }
 
 // FetchCatalog returns every dataset the portal reports, following pagination.
+// It cannot be cancelled; prefer FetchCatalogCtx.
 func (c *Client) FetchCatalog(portal string) ([]CatalogEntry, error) {
-	return c.fetchCatalogScheme(portal, "https")
+	return c.FetchCatalogCtx(context.Background(), portal, "https")
 }
 
 // FetchCatalogScheme is FetchCatalog with an explicit URL scheme (for tests).
 func (c *Client) FetchCatalogScheme(portal, scheme string) ([]CatalogEntry, error) {
-	return c.fetchCatalogScheme(portal, scheme)
+	return c.FetchCatalogCtx(context.Background(), portal, scheme)
 }
 
-// fetchCatalogScheme is the scheme-parameterised form used in tests with httptest.
-func (c *Client) fetchCatalogScheme(portal, scheme string) ([]CatalogEntry, error) {
+// FetchCatalogCtx is the context-aware catalog fetch behind FetchCatalog. ctx
+// cancels in-flight requests between and during pages. scheme is "https"
+// except in tests with httptest.
+func (c *Client) FetchCatalogCtx(ctx context.Context, portal, scheme string) ([]CatalogEntry, error) {
 	base := &url.URL{Scheme: scheme, Host: portal, Path: "/api/catalog/v1"}
 
 	var all []CatalogEntry
@@ -53,13 +57,16 @@ func (c *Client) fetchCatalogScheme(portal, scheme string) ([]CatalogEntry, erro
 	pageSize := c.batchSize()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		q := url.Values{}
 		q.Set("domains", portal)
 		q.Set("limit", strconv.Itoa(pageSize))
 		q.Set("offset", strconv.Itoa(offset))
 		base.RawQuery = q.Encode()
 
-		page, total, err := c.getCatalogPage(base.String())
+		page, total, err := c.getCatalogPage(ctx, base.String())
 		if err != nil {
 			return nil, err
 		}
@@ -95,8 +102,8 @@ type catalogResponse struct {
 // sync orchestrator), which can re-invoke FetchCatalog if desired. The row-
 // streaming path in getPage has its own 429/5xx retry loop; conflating the
 // two would create competing retry scopes.
-func (c *Client) getCatalogPage(fullURL string) ([]CatalogEntry, int, error) {
-	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
+func (c *Client) getCatalogPage(ctx context.Context, fullURL string) ([]CatalogEntry, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("build catalog request: %w", err)
 	}

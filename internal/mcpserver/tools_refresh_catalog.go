@@ -72,7 +72,7 @@ func refreshOnePortal(ctx context.Context, alias string, cfg *config.Config) Ref
 	defer w.Close()
 
 	client := &socrata.Client{AppToken: cfg.AppToken}
-	catalog, err := client.FetchCatalog(cfg.Portal)
+	catalog, err := client.FetchCatalogCtx(ctx, cfg.Portal, "https")
 	if err != nil {
 		res.Error = fmt.Sprintf("fetch catalog: %v", err)
 		return res

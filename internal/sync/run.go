@@ -74,11 +74,7 @@ func Run(ctx context.Context, cfg *config.Config, d Deps) (Summary, error) {
 		return sum, fmt.Errorf("read cached catalog: %w", err)
 	}
 	if d.RefreshCatalog || len(catalog) == 0 {
-		if scheme == "http" {
-			catalog, err = d.Client.FetchCatalogScheme(cfg.Portal, scheme)
-		} else {
-			catalog, err = d.Client.FetchCatalog(cfg.Portal)
-		}
+		catalog, err = d.Client.FetchCatalogCtx(ctx, cfg.Portal, scheme)
 		if err != nil {
 			return sum, fmt.Errorf("fetch catalog: %w", err)
 		}

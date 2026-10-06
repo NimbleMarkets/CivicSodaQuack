@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -555,5 +556,33 @@ func TestIncremental_Bootstrap_FailureLeavesPriorTableIntact(t *testing.T) {
 	}
 	if state, _ := w.ReadDatasetState(ds.ID); state != nil {
 		t.Errorf("dataset_state written after failed bootstrap: %+v", state)
+	}
+}
+
+// The effective batch_size from YAML must reach the page size; the client's own
+// setting is only a fallback.
+func TestIncremental_UsesEffectiveBatchSize(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	var limits []string
+	ds := mkIncrDataset("aaaa-0001", 5, "2026-04-22")
+	ds.OnResource = func(r *http.Request) { limits = append(limits, r.URL.Query().Get("$limit")) }
+	srv := newFakeSocrata(t, ds)
+
+	shared := &socrata.Client{BatchSize: 5000}
+	strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: "run1"}
+	target := DatasetTarget{ID: ds.ID, Effective: config.Effective{
+		DatasetID: ds.ID, Table: "crimes", BatchSize: 2,
+	}}
+	res, _ := strat.Sync(context.Background(), target, shared, w, &RecordingReporter{}, 1, 1)
+	if res.Status != "ok" {
+		t.Fatalf("sync: %v", res.Err)
+	}
+	if got := strings.Join(limits, ","); got != "2,2,2" {
+		t.Errorf("$limit per page: got %s, want 2,2,2", got)
+	}
+	if shared.BatchSize != 5000 {
+		t.Errorf("shared client mutated: %d", shared.BatchSize)
 	}
 }
