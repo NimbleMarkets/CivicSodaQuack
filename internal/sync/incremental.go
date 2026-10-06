@@ -334,6 +334,19 @@ func (c *resumeCursor) observe(row socrata.Row, hwmCol string) {
 	c.ts, c.id = t, id
 }
 
+// formatCursorTime renders t for a SoQL predicate, keeping every fractional
+// digit it has and at least the three of a millisecond. extractRowHWM accepts
+// finer precision, and truncating here would make a consumed row at
+// 12:00:00.123456 satisfy "ts > '12:00:00.123'", so a limited run would
+// re-select it forever.
+func formatCursorTime(t time.Time) string {
+	s := t.UTC().Format("2006-01-02T15:04:05.000000000")
+	for strings.HasSuffix(s, "0") && len(s) > len("2006-01-02T15:04:05.000") {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
 // where returns the $where clause that selects rows strictly after the cursor,
 // or "" when there is no cursor yet. Without an :id (state from before hwm_id)
 // it falls back to "timestamp >=", which re-reads the ties; writes are PK
@@ -342,7 +355,7 @@ func (c resumeCursor) where(hwmCol string) string {
 	if c.ts == nil {
 		return ""
 	}
-	ts := c.ts.UTC().Format("2006-01-02T15:04:05.000")
+	ts := formatCursorTime(*c.ts)
 	if c.id == "" {
 		return fmt.Sprintf("%s >= '%s'", hwmCol, ts)
 	}

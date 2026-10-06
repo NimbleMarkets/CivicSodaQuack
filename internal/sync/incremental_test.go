@@ -667,3 +667,35 @@ func TestIncremental_LegacyStateResumesWithGEThenStoresCursor(t *testing.T) {
 		t.Errorf("caught-up delta: status=%q rows=%d err=%v, want ok/0", res.Status, res.RowsWritten, res.Err)
 	}
 }
+
+// The cursor predicate must keep the precision of the timestamps it consumed.
+// Truncating to milliseconds made a row at .123456 satisfy "ts > '...:.123'",
+// so a limited delta re-selected the row it had just consumed and never moved.
+func TestIncremental_LimitedDeltaKeepsSubMillisecondPrecision(t *testing.T) {
+	w, _ := duckdb.Open(":memory:")
+	defer w.Close()
+
+	rows := []map[string]any{
+		{":id": "row-a", ":updated_at": "2026-04-22T00:00:00.123456", "score": float64(1)},
+		{":id": "row-b", ":updated_at": "2026-04-22T00:00:00.123456", "score": float64(2)},
+		{":id": "row-c", ":updated_at": "2026-04-22T00:00:00.123789", "score": float64(3)},
+	}
+	cols := []map[string]string{{"fieldName": "score", "dataTypeName": "number"}}
+	for i, want := range []int{1, 2, 3, 3} { // bootstrap, then three deltas
+		ds := fakeDataset{ID: "aaaa-0001", Name: "Ds", Columns: cols, Rows: rows}
+		srv := newFakeSocrata(t, ds)
+		strat := &IncrementalStrategy{Portal: fakeHost(srv), Scheme: "http", RunID: "run" + itoa(i)}
+		target := DatasetTarget{ID: ds.ID, Effective: config.Effective{
+			DatasetID: ds.ID, Table: "crimes", BatchSize: 10, Limit: 1,
+		}}
+		res, _ := strat.Sync(context.Background(), target, &socrata.Client{BatchSize: 10}, w, &RecordingReporter{}, 1, 1)
+		if res.Status != "ok" {
+			t.Fatalf("run %d: %v", i, res.Err)
+		}
+		var n int
+		_ = w.DB.QueryRow(`SELECT COUNT(*) FROM main.crimes`).Scan(&n)
+		if n != want {
+			t.Fatalf("after run %d: %d rows stored, want %d", i, n, want)
+		}
+	}
+}
